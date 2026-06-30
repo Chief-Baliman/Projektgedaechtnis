@@ -1,6 +1,6 @@
 {
   "name": "chief-developer-hub",
-  "version": "3.0.0",
+  "version": "5.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,8 @@
     "dev": "NODE_ENV=development node server/src/index.js"
   },
   "dependencies": {
+    "acorn": "^8.15.0",
+    "acorn-walk": "^8.3.4",
     "adm-zip": "^0.5.16",
     "cookie-parser": "^1.4.7",
     "dotenv": "^17.2.3",
@@ -15,7 +17,5 @@
     "helmet": "^8.1.0",
     "nanoid": "^5.1.6"
   },
-  "engines": {
-    "node": ">=22"
-  }
+  "engines": { "node": ">=22" }
 }
