@@ -7,7 +7,7 @@ const dbPath = path.join(DATA_DIR, 'db.json');
 const auditPath = path.join(DATA_DIR, 'audit.log');
 
 const initialDb = {
-  version: 6,
+  version: 8,
   settings: {},
   secrets: {},
   projects: {},
@@ -65,13 +65,54 @@ export function getGithubToken() {
   return decryptText(db.settings.githubToken || '');
 }
 
+export function getSecretValue(name) {
+  const db = readDb();
+  const item = db.secrets?.[name];
+  if (!item) return '';
+  return decryptText(item.value || '');
+}
+
+export function hasSecret(name) {
+  const db = readDb();
+  return Boolean(db.secrets?.[name]);
+}
+
 export function getSettingsSafe() {
   const db = readDb();
   return {
     hasGithubToken: Boolean(db.settings.githubToken),
     githubTokenHint: db.settings.githubTokenHint || '',
+    aiProvider: db.settings.aiProvider || 'gemini',
+    aiModels: db.settings.aiModels || {},
+    aiKeys: {
+      openai: Boolean(db.secrets?.AI_KEY_OPENAI || db.secrets?.OPENAI_API_KEY),
+      gemini: Boolean(db.secrets?.AI_KEY_GEMINI),
+      groq: Boolean(db.secrets?.AI_KEY_GROQ),
+      openrouter: Boolean(db.secrets?.AI_KEY_OPENROUTER),
+      mistral: Boolean(db.secrets?.AI_KEY_MISTRAL)
+    },
+    hasOpenAiKey: Boolean(db.secrets?.AI_KEY_OPENAI || db.secrets?.OPENAI_API_KEY),
     updatedAt: db.updatedAt
   };
+}
+
+
+export function getAiSettings() {
+  const db = readDb();
+  return {
+    provider: db.settings.aiProvider || 'gemini',
+    models: db.settings.aiModels || {}
+  };
+}
+
+export function saveAiSettings(provider, model) {
+  const db = readDb();
+  const p = String(provider || 'gemini').trim().toLowerCase();
+  db.settings.aiProvider = p;
+  db.settings.aiModels = db.settings.aiModels || {};
+  if (model) db.settings.aiModels[p] = String(model).trim();
+  writeDb(db);
+  audit('ai_settings_saved', { provider: p, model: db.settings.aiModels[p] || '' });
 }
 
 export function saveScan(fullName, analysis) {

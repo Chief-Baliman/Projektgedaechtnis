@@ -9,6 +9,9 @@ export const DATA_DIR = process.env.DATA_DIR || './data';
 export const MAX_TEXT_FILE_BYTES = Number(process.env.MAX_TEXT_FILE_BYTES || 850_000);
 export const MAX_TOTAL_SCAN_BYTES = Number(process.env.MAX_TOTAL_SCAN_BYTES || 18_000_000);
 export const MAX_FILES_TO_READ = Number(process.env.MAX_FILES_TO_READ || 450);
+export const DEFAULT_AI_PROVIDER = process.env.DEFAULT_AI_PROVIDER || 'gemini';
+export const DEFAULT_AI_MODEL = process.env.DEFAULT_AI_MODEL || '';
+export const MAX_AI_CORPUS_CHARS = Number(process.env.MAX_AI_CORPUS_CHARS || 260_000);
 
 if (ENCRYPTION_KEY.length < 32) {
   console.warn('WARNUNG: ENCRYPTION_KEY sollte mindestens 32 Zeichen haben.');

@@ -1,29 +1,30 @@
-# Chief Developer Hub v6
+# Chief Developer Hub v8
 
-Zentrale Entwickleroberfläche für GitHub-Projekte, Projektgedächtnis, Code-Analyse, ChatGPT-Kontext und ZIP-Deployments.
+Developer Hub mit GitHub-Scanner, Scanner Debug, Code-Fakten, ZIP-Deploy, Rollback und Multi-Provider-KI-Codeanalyse.
 
-## Kernfunktionen
+## Neu in v8
 
-- Login mit Admin-Passwort
-- GitHub Token serverseitig verschlüsselt speichern
-- Repositories laden
-- Repository vollständig über GitHub Tree API inventarisieren
-- Code wirklich lesen und auswerten
-- Scanner Debug mit Datei, Zeile, Snippet und Begründung
-- Projekt-Wiki und ChatGPT-Kontext aus Code-Fakten generieren
-- Ressourcen erkennen, ohne daraus blind den Projektzweck abzuleiten
-- Firebase-Projekt-ID wird als Ressource behandelt, nicht als Zweck
-- ZIP-Deploy ins Repository
-- letzter Upload als Rollback-Punkt
-- Projektgruppen: ChiefCards, ChiefBaliman, Quizt/Laura, Infrastruktur, Privat, Unsortiert
+- KI-Anbieter auswählbar: Google Gemini, Groq, OpenRouter, Mistral, OpenAI
+- API Keys werden serverseitig verschlüsselt gespeichert
+- Anbieter und Modell werden im Hub gespeichert
+- KI-Analyse nutzt weiter den gelesenen Code-Korpus und die Scanner-Fakten
+- OpenAI bleibt möglich, ist aber nicht mehr Pflicht
 
-## Start auf dem VPS
+## Update
+
+1. Inhalt dieser ZIP ins GitHub-Repository hochladen.
+2. Auf dem VPS:
 
 ```bash
 cd /opt/projects/developer-hub
-git pull
+git fetch --all
+git reset --hard origin/main
 npm install
+pkill -f "node server/src/index.js" || true
 npm start
 ```
 
-Die `.env` bleibt auf dem Server und wird nicht hochgeladen.
+3. Browser hart neu laden.
+4. KI-Anbieter links wählen, Modell prüfen, Key speichern.
+5. Repo scannen.
+6. Tab KI-Analyse öffnen und Analyse starten.

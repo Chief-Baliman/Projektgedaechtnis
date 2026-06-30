@@ -7,7 +7,8 @@ import cors from 'cors';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { PORT, APP_ORIGIN, ADMIN_PASSWORD } from './config.js';
-import { audit, exportData, getAllProjects, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, listSecrets, revealSecret, saveGithubToken, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
+import { audit, exportData, getAllProjects, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, listSecrets, revealSecret, saveAiSettings, saveGithubToken, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
+import { getAiProviders, runAiAnalysis } from './aiAnalyzer.js';
 import { listRepos, getBranchHead, putFile, resetBranch } from './github.js';
 import { scanRepository, SCANNER_VERSION } from './scanner/index.js';
 
@@ -44,7 +45,7 @@ app.post('/api/login', (req,res) => {
   const session = makeSession();
   sessions.add(session);
   audit('login', {});
-  res.json({ ok:true, session, settings:getSettingsSafe(), scannerVersion: SCANNER_VERSION });
+  res.json({ ok:true, session, settings:{ ...getSettingsSafe(), aiProviders:getAiProviders() }, scannerVersion: SCANNER_VERSION });
 });
 
 app.post('/api/logout', requireAuth, (req,res) => {
@@ -53,8 +54,11 @@ app.post('/api/logout', requireAuth, (req,res) => {
   res.json({ ok:true });
 });
 
-app.get('/api/settings', requireAuth, (req,res) => res.json(getSettingsSafe()));
-app.post('/api/github/token', requireAuth, (req,res) => { saveGithubToken(req.body?.token || ''); res.json({ ok:true, settings:getSettingsSafe() }); });
+app.get('/api/settings', requireAuth, (req,res) => res.json({ ...getSettingsSafe(), aiProviders:getAiProviders() }));
+app.post('/api/github/token', requireAuth, (req,res) => { saveGithubToken(req.body?.token || ''); res.json({ ok:true, settings:{ ...getSettingsSafe(), aiProviders:getAiProviders() } }); });
+app.post('/api/ai/settings', requireAuth, (req,res) => { saveAiSettings(req.body?.provider || 'gemini', req.body?.model || ''); res.json({ ok:true, settings:{ ...getSettingsSafe(), aiProviders:getAiProviders() } }); });
+app.post('/api/ai/key', requireAuth, (req,res) => { const provider = String(req.body?.provider || 'gemini').toLowerCase(); const keyName = `AI_KEY_${provider.toUpperCase()}`; saveSecret(keyName, req.body?.key || '', { type:provider, purpose:'KI-Codeanalyse' }); res.json({ ok:true, settings:{ ...getSettingsSafe(), aiProviders:getAiProviders() } }); });
+app.post('/api/openai/key', requireAuth, (req,res) => { saveSecret('AI_KEY_OPENAI', req.body?.key || '', { type:'openai', purpose:'KI-Codeanalyse' }); res.json({ ok:true, settings:{ ...getSettingsSafe(), aiProviders:getAiProviders() } }); });
 app.get('/api/github/repos', requireAuth, async (req,res) => { try { res.json(await listRepos()); } catch(e) { res.status(500).json({ error:e.message }); } });
 
 app.get('/api/projects', requireAuth, (req,res) => res.json({ projects:getAllProjects(), resources:getResourceGraph() }));
@@ -67,6 +71,20 @@ app.post('/api/projects/:owner/:repo/scan', requireAuth, async (req,res) => {
     const analysis = await scanRepository(fullName);
     saveScan(fullName, analysis);
     res.json(analysis);
+  } catch(e) {
+    console.error(e);
+    res.status(500).json({ error:e.message });
+  }
+});
+
+
+app.post('/api/projects/:owner/:repo/ai/analyze', requireAuth, async (req,res) => {
+  try {
+    const fullName = `${req.params.owner}/${req.params.repo}`;
+    const scan = getScan(fullName);
+    if (!scan) return res.status(400).json({ error:'Bitte zuerst einen normalen Repository-Scan ausführen.' });
+    const ai = await runAiAnalysis(fullName, scan, { provider:req.body?.provider, model:req.body?.model });
+    res.json({ ok:true, ai, scan:getScan(fullName) });
   } catch(e) {
     console.error(e);
     res.status(500).json({ error:e.message });

@@ -61,6 +61,18 @@ function render() {
           <div class="meta" style="margin-top:8px">${state.settings?.hasGithubToken ? `Gespeichert: ${escapeHtml(state.settings.githubTokenHint || 'ja')}` : 'Noch kein Token gespeichert'}</div>
         </div>
         <div class="card">
+          <div class="meta">KI-Anbieter</div>
+          <select id="aiProvider" onchange="fillAiModelDefault()">${renderAiProviderOptions()}</select>
+          <div style="height:8px"></div>
+          <input id="aiModel" placeholder="Modell" value="${escapeAttr(getCurrentAiModel())}">
+          <div style="height:8px"></div>
+          <div class="row">
+            <input id="aiKeyInput" type="password" placeholder="API Key einfügen">
+            <button onclick="saveAiProviderAndKey()">Speichern</button>
+          </div>
+          <div class="meta" style="margin-top:8px">${renderAiKeyStatus()}</div>
+        </div>
+        <div class="card">
           <input id="repoSearch" placeholder="Repo suchen" oninput="renderRepoList()">
           <div id="repoList" style="margin-top:10px"></div>
         </div>
@@ -107,6 +119,59 @@ async function saveToken() {
     const data = await api('/api/github/token', { method:'POST', body:JSON.stringify({ token }) });
     state.settings = data.settings;
     state.message = 'GitHub Token gespeichert.';
+    state.error = '';
+    render();
+  } catch(e) { showError(e); }
+}
+
+function renderAiProviderOptions() {
+  const providers = state.settings?.aiProviders || { gemini:{label:'Google Gemini', defaultModel:'gemini-1.5-flash'}, openai:{label:'OpenAI', defaultModel:'gpt-4.1-mini'}, groq:{label:'Groq', defaultModel:'llama-3.3-70b-versatile'}, openrouter:{label:'OpenRouter', defaultModel:'deepseek/deepseek-chat-v3.1:free'}, mistral:{label:'Mistral', defaultModel:'mistral-small-latest'} };
+  const current = state.settings?.aiProvider || 'gemini';
+  return Object.entries(providers).map(([key, info]) => `<option value="${escapeAttr(key)}" ${key===current?'selected':''}>${escapeHtml(info.label)}</option>`).join('');
+}
+
+function getCurrentAiModel() {
+  const provider = state.settings?.aiProvider || 'gemini';
+  const providers = state.settings?.aiProviders || {};
+  return state.settings?.aiModels?.[provider] || providers?.[provider]?.defaultModel || '';
+}
+
+function renderAiKeyStatus() {
+  const provider = state.settings?.aiProvider || 'gemini';
+  const providers = state.settings?.aiProviders || {};
+  const label = providers?.[provider]?.label || provider;
+  const hasKey = Boolean(state.settings?.aiKeys?.[provider]);
+  return `${escapeHtml(label)}: ${hasKey ? 'API Key gespeichert' : 'noch kein Key gespeichert'}`;
+}
+
+function fillAiModelDefault() {
+  const provider = document.getElementById('aiProvider')?.value || 'gemini';
+  const providers = state.settings?.aiProviders || {};
+  const model = state.settings?.aiModels?.[provider] || providers?.[provider]?.defaultModel || '';
+  const input = document.getElementById('aiModel');
+  if (input) input.value = model;
+}
+
+async function saveAiProviderAndKey() {
+  try {
+    const provider = document.getElementById('aiProvider').value;
+    const model = document.getElementById('aiModel').value.trim();
+    const key = document.getElementById('aiKeyInput').value.trim();
+    let data = await api('/api/ai/settings', { method:'POST', body:JSON.stringify({ provider, model }) });
+    if (key) data = await api('/api/ai/key', { method:'POST', body:JSON.stringify({ provider, key }) });
+    state.settings = data.settings;
+    state.message = 'KI-Anbieter gespeichert.';
+    state.error = '';
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function saveOpenAiKey() {
+  try {
+    const key = document.getElementById('aiKeyInput')?.value.trim() || '';
+    const data = await api('/api/openai/key', { method:'POST', body:JSON.stringify({ key }) });
+    state.settings = data.settings;
+    state.message = 'OpenAI API Key gespeichert.';
     state.error = '';
     render();
   } catch(e) { showError(e); }
@@ -197,8 +262,8 @@ function renderDashboard() {
 }
 
 function renderProject(scan) {
-  const tabs = ['overview','wiki','chatgpt','debug','facts','files','deploy','notes','secrets'];
-  const names = { overview:'Übersicht', wiki:'Wiki', chatgpt:'ChatGPT', debug:'Scanner Debug', facts:'Code-Fakten', files:'Dateien', deploy:'Deploy', notes:'Notizen', secrets:'Secrets' };
+  const tabs = ['overview','wiki','chatgpt','ai','debug','facts','files','deploy','notes','secrets'];
+  const names = { overview:'Übersicht', wiki:'Wiki', chatgpt:'ChatGPT', ai:'KI-Analyse', debug:'Scanner Debug', facts:'Code-Fakten', files:'Dateien', deploy:'Deploy', notes:'Notizen', secrets:'Secrets' };
   return `
     <div class="tabs">${tabs.map(t => `<button class="tab ${state.tab===t?'active':''}" onclick="setTab('${t}')">${names[t]}</button>`).join('')}</div>
     <div>${renderTab(scan)}</div>`;
@@ -208,6 +273,7 @@ function renderTab(scan) {
   if (state.tab === 'overview') return renderOverview(scan);
   if (state.tab === 'wiki') return `<div class="card"><div class="row"><button onclick="copyText(${JSON.stringify(scan.wiki)})">Wiki kopieren</button></div><pre>${escapeHtml(scan.wiki)}</pre></div>`;
   if (state.tab === 'chatgpt') return `<div class="card"><div class="row"><button onclick="copyText(${JSON.stringify(scan.chatgptContext)})">Kontext kopieren</button></div><pre>${escapeHtml(scan.chatgptContext)}</pre></div>`;
+  if (state.tab === 'ai') return renderAi(scan);
   if (state.tab === 'debug') return renderDebug(scan);
   if (state.tab === 'facts') return renderFacts(scan.facts || []);
   if (state.tab === 'files') return renderFiles(scan);
@@ -224,6 +290,7 @@ function renderOverview(scan) {
       <div class="card">
         <h2>Zweck</h2>
         <p>${escapeHtml(scan.purpose?.text || '')}</p>
+        ${scan.ai ? `<span class="pill ok">KI analysiert: ${escapeHtml(scan.ai.model || '')}</span>` : `<span class="pill warn">Noch keine KI-Analyse</span>`}
         <div class="progress"><span style="width:${confidence}%"></span></div>
         <div class="meta">Sicherheit: ${confidence} % · Gruppe: ${escapeHtml(GROUPS[scan.projectGroup] || scan.projectGroup)}</div>
       </div>
@@ -234,6 +301,45 @@ function renderOverview(scan) {
     <div class="card"><h2>Ressourcen</h2>${(scan.resources||[]).map(r => `<span class="pill">${escapeHtml(r.label)}: ${escapeHtml(r.value)}</span>`).join('') || '<div class="meta">Keine Ressourcen erkannt.</div>'}</div>
     <div class="card"><h2>Scores</h2>${(scan.scores||[]).map(s => `<div class="kv"><b>${escapeHtml(s.label)}</b><span>${s.score}</span></div>`).join('')}</div>
     <div class="card"><h2>Wichtigste Belege</h2>${renderFactList((scan.purpose?.evidence || []).slice(0,10))}</div>`;
+}
+
+
+function renderAi(scan) {
+  const ai = scan.ai;
+  if (!ai) {
+    return `<div class="card">
+      <h2>KI-Codeanalyse</h2>
+      <p class="meta">Die normale Scanner-Engine liest das Repo und sammelt Fakten. Dieser Schritt schickt den gelesenen Code-Korpus serverseitig an den gespeicherten KI-Anbieter und lässt daraus eine echte Projektanalyse erzeugen.</p>
+      <p class="meta">Voraussetzung: KI-Anbieter und API Key links speichern. Gemini, Groq, OpenRouter, Mistral und OpenAI werden unterstützt.</p>
+      <button onclick="runAiAnalysis()">KI-Analyse starten</button>
+    </div>`;
+  }
+  return `<div class="grid">
+    <div class="card"><h2>KI-Zweck</h2><p>${escapeHtml(ai.purpose)}</p><div class="meta">Sicherheit: ${Math.round((ai.confidence || 0) * 100)} % · Anbieter: ${escapeHtml(ai.providerLabel || ai.provider || '')} · Modell: ${escapeHtml(ai.model || '')}</div></div>
+    <div class="card"><h2>Input</h2><div class="kv"><b>Dateien gelesen</b><span>${ai.inputStats?.filesRead || 0}</span></div><div class="kv"><b>KI-Korpus</b><span>${ai.inputStats?.corpusChars || 0} Zeichen</span></div><div class="kv"><b>Dateien an KI</b><span>${ai.inputStats?.includedFiles || 0}</span></div></div>
+  </div>
+  <div class="card"><h2>Zusammenfassung</h2><p>${escapeHtml(ai.summary || '')}</p></div>
+  <div class="card"><h2>Hauptfunktionen</h2>${(ai.mainFeatures||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('') || '<div class="meta">Keine erkannt.</div>'}</div>
+  <div class="card"><h2>Datenmodell</h2>${(ai.dataModel||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('') || '<div class="meta">Keine erkannt.</div>'}</div>
+  <div class="card"><h2>Firebase</h2><p>${escapeHtml(ai.firebase?.explanation || '')}</p><div class="meta">Feste Pfade: ${(ai.firebase?.fixedPaths||[]).map(escapeHtml).join(', ') || 'keine'}<br>Dynamische Pfade: ${(ai.firebase?.dynamicPaths||[]).map(escapeHtml).join(', ') || 'keine'}</div></div>
+  <div class="card"><h2>Belege</h2>${(ai.evidence||[]).map(e => `<div class="fact"><strong>${escapeHtml(e.file)}:${escapeHtml(e.line)}</strong><div>${escapeHtml(e.finding)}</div><div class="snippet">${escapeHtml(e.snippet)}</div></div>`).join('')}</div>
+  <div class="card"><h2>Regeln und Risiken</h2><h3>Risiken</h3>${(ai.risks||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('') || '<div class="meta">Keine.</div>'}<h3>Guardrails</h3>${(ai.guardrails||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('')}</div>
+  <div class="card"><h2>Aktionen</h2><button onclick="runAiAnalysis()">KI-Analyse neu starten</button><button class="secondary" onclick="copyText(${JSON.stringify(ai.chatgptContext || '')})">KI-Kontext kopieren</button></div>`;
+}
+
+async function runAiAnalysis() {
+  try {
+    state.message = 'KI analysiert den gelesenen Code. Das kann je nach Repo 30 bis 90 Sekunden dauern...';
+    state.error = '';
+    render();
+    const [owner, repo] = state.selectedRepo.split('/');
+    const data = await api(`/api/projects/${owner}/${repo}/ai/analyze`, { method:'POST', body:JSON.stringify({ provider:state.settings?.aiProvider, model:getCurrentAiModel() }) });
+    state.scan = data.scan;
+    state.tab = 'ai';
+    state.message = 'KI-Analyse fertig.';
+    await loadProjects(false);
+    render();
+  } catch(e) { showError(e); }
 }
 
 function renderDebug(scan) {
@@ -363,4 +469,4 @@ if (state.session) {
   api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
 } else render();
 
-window.login = login; window.saveToken = saveToken; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.renderRepoList = renderRepoList;
+window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
