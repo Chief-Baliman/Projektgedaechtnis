@@ -99,7 +99,7 @@ app.post('/api/repos/scan-all', requireAuth, async (req,res) => {
 
 app.get('/api/projects', requireAuth, (req,res) => res.json({ projects: listProjects() }));
 app.get('/api/projects/:owner/:repo', requireAuth, (req,res) => { const p = getProject(`${req.params.owner}/${req.params.repo}`); if (!p) return res.status(404).json({ error:'Projekt nicht gefunden.' }); res.json({ project:p }); });
-app.post('/api/projects/:owner/:repo/notes', requireAuth, (req,res) => { const fullName = `${req.params.owner}/${req.params.repo}`; const p = getProject(fullName); if (!p) return res.status(404).json({ error:'Projekt nicht gefunden.' }); p.notes = req.body?.notes || ''; p.manualContext = req.body?.manualContext || p.manualContext || ''; p.updatedAt = now(); saveProject(fullName, p); audit('project_notes_saved', { fullName }); res.json({ ok:true, project:p }); });
+app.post('/api/projects/:owner/:repo/notes', requireAuth, (req,res) => { const fullName = `${req.params.owner}/${req.params.repo}`; const p = getProject(fullName); if (!p) return res.status(404).json({ error:'Projekt nicht gefunden.' }); p.notes = req.body?.notes || ''; p.manualContext = req.body?.manualContext || p.manualContext || ''; if (req.body?.projectSpaceKey && p.analysis) { const map = { quizt:{ key:'quizt', name:'Quizt / Laura', type:'externes Projekt', owner:'Laura / Quizt', separation:'Nicht mit ChiefCards vermischen. Fabian entwickelt Technik, aber Quizt ist inhaltlich und organisatorisch ein eigenes Projekt.' }, chiefcards:{ key:'chiefcards', name:'ChiefCards / Fabian', type:'eigenes Business', owner:'Fabian / ChiefCards', separation:'Gehört zu ChiefCards, Stream, Shop, Kartenhandel oder internen Tools.' }, server:{ key:'server', name:'Server / Bots', type:'Infrastruktur', owner:'Fabian', separation:'Servernahe Dienste getrennt von einzelnen Markenprojekten dokumentieren.' }, unknown:{ key:'unknown', name:'Unsortiert', type:'noch einordnen', owner:'unbekannt', separation:'Projektgruppe manuell prüfen.' } }; p.analysis.projectSpace = map[req.body.projectSpaceKey] || p.analysis.projectSpace; } p.updatedAt = now(); saveProject(fullName, p); audit('project_notes_saved', { fullName }); res.json({ ok:true, project:p }); });
 
 app.post('/api/secrets', requireAuth, (req,res) => { const { scope='global', name, value, note='' } = req.body || {}; if (!name || !value) return res.status(400).json({ error:'Name und Wert sind Pflicht.' }); const id = nanoid(); addSecret({ id, scope, name, encrypted_value: encryptText(value), note }); audit('secret_saved', { scope, name }); res.json({ ok:true, id }); });
 app.get('/api/secrets', requireAuth, (req,res) => res.json({ secrets: listSecrets().map(({ encrypted_value, ...s }) => s) }));
@@ -107,14 +107,81 @@ app.delete('/api/secrets/:id', requireAuth, (req,res) => { deleteSecret(req.para
 
 app.get('/api/context/:owner/:repo', requireAuth, (req,res) => {
   const fullName = `${req.params.owner}/${req.params.repo}`; const project = getProject(fullName); if (!project) return res.status(404).json({ error:'Projekt nicht gefunden.' });
-  const all = listProjects(); const ids = project.analysis?.firebase?.projectIds || [];
-  const related = all.filter(p => p.fullName !== fullName && (p.analysis?.firebase?.projectIds || []).some(id => ids.includes(id)));
+  const all = listProjects(); const ids = project.analysis?.firebase?.projectIds || []; const spaceKey = project.analysis?.projectSpace?.key;
+  const related = all.filter(p => p.fullName !== fullName && (
+    (p.analysis?.firebase?.projectIds || []).some(id => ids.includes(id)) ||
+    (spaceKey && p.analysis?.projectSpace?.key === spaceKey)
+  ));
   const secrets = listSecrets().filter(s => s.scope === fullName || s.scope === 'global').map(({ scope, name, note }) => ({ scope, name, note }));
   res.json({ prompt: buildPrompt(project, related, secrets), related });
 });
 function buildPrompt(project, related, secrets) {
-  const a = project.analysis || {}; const f = a.firebase || {};
-  return `Ich möchte dieses Projekt weiterentwickeln. Bitte berücksichtige diesen aktuellen Stand.\n\n# Projekt\n${a.fullName}\n\n# Zweck\n${a.purpose}\n\n# Repository\n${a.htmlUrl}\nDefault Branch: ${a.defaultBranch}\nGitHub Pages: ${a.pagesUrl || 'nicht erkannt'}\n\n# Technik\n${(a.tech || []).map(x => '- ' + x).join('\n') || '- nicht erkannt'}\n\n# Firebase\nProjekt-IDs: ${(f.projectIds || []).join(', ') || 'keine erkannt'}\nDatenbank-URLs: ${(f.dbUrls || []).join(', ') || 'keine erkannt'}\nDatenpfade: ${(f.paths || []).join(', ') || 'keine erkannt'}\n\n# Architektur\n${(a.architecture || []).map(x => '- ' + x).join('\n') || '- keine Details'}\n\n# Wichtige Dateien\n${(a.importantFiles || []).map(x => '- ' + x).join('\n') || '- keine erkannt'}\n\n# Projekt-Wiki\n${a.wiki || ''}\n\n# Manuelle Notizen\n${project.notes || 'Keine'}\n\n# Zusätzlicher Projektkontext\n${project.manualContext || 'Keine'}\n\n# Gemeinsame Ressourcen / Abhängigkeiten\n${related.length ? related.map(p => `- ${p.fullName}: teilt vermutlich Firebase-Projekt ${(p.analysis?.firebase?.projectIds || []).join(', ')}`).join('\n') : '- Keine gemeinsamen Ressourcen erkannt'}\n\n# Hinterlegte Secrets\n${secrets.length ? secrets.map(s => `- ${s.scope}: ${s.name}${s.note ? ' (' + s.note + ')' : ''}`).join('\n') : '- Keine Secrets hinterlegt'}\nWichtig: Secrets sind nur im Developer Hub gespeichert und dürfen nicht ausgeschrieben werden. Wenn sie für Deployment nötig sind, benenne nur den Secret-Namen.\n\n# Regeln für Änderungen\n${(a.guardrails || []).map(x => '- ' + x).join('\n')}\n\nWenn du Code änderst, liefere am Ende eine vollständige ZIP für das Repository. Nicht enthaltene Dateien sollen nicht gelöscht werden, außer ich verlange es ausdrücklich.\n`;
+  const a = project.analysis || {}; const f = a.firebase || {}; const space = a.projectSpace || {};
+  const hardDeps = related.filter(p => (p.analysis?.firebase?.projectIds || []).some(id => (f.projectIds || []).includes(id)));
+  const sameSpace = related.filter(p => p.analysis?.projectSpace?.key === space.key && !hardDeps.includes(p));
+  return `Ich möchte dieses Projekt weiterentwickeln. Bitte berücksichtige diesen aktuellen Stand.
+
+# Projekt
+${a.fullName}
+
+# Projektgruppe / Besitz
+Bereich: ${space.name || 'nicht erkannt'}
+Typ: ${space.type || 'nicht erkannt'}
+Verantwortlich: ${space.owner || 'nicht erkannt'}
+Trennung: ${space.separation || 'Keine Angabe'}
+${(a.ownershipNotes || []).map(x => '- ' + x).join('\n')}
+
+# Zweck
+${a.purpose || 'nicht erkannt'}
+
+# Repository
+${a.htmlUrl}
+Default Branch: ${a.defaultBranch}
+GitHub Pages: ${a.pagesUrl || 'nicht erkannt'}
+
+# Technik
+${(a.tech || []).map(x => '- ' + x).join('\n') || '- nicht erkannt'}
+
+# Firebase
+Projekt-IDs: ${(f.projectIds || []).join(', ') || 'keine erkannt'}
+Datenbank-URLs: ${(f.dbUrls || []).join(', ') || 'keine erkannt'}
+Datenpfade: ${(f.paths || []).join(', ') || 'keine erkannt'}
+Rules erwähnt: ${f.rulesMentioned ? 'ja' : 'nein'}
+
+# Architektur
+${(a.architecture || []).map(x => '- ' + x).join('\n') || '- keine Details'}
+
+# Erkannte Datenmodelle / Routen
+Datenmodelle: ${(a.dataModel || []).join(', ') || 'keine erkannt'}
+Routen/API-Pfade: ${(a.routes || []).join(', ') || 'keine erkannt'}
+
+# Wichtige Dateien
+${(a.importantFiles || []).map(x => '- ' + x).join('\n') || '- keine erkannt'}
+
+# Projekt-Wiki
+${a.wiki || ''}
+
+# Manuelle Notizen
+${project.notes || 'Keine'}
+
+# Zusätzlicher Projektkontext
+${project.manualContext || 'Keine'}
+
+# Harte Abhängigkeiten / geteilte Ressourcen
+${hardDeps.length ? hardDeps.map(p => `- ${p.fullName}: teilt Firebase-Projekt ${(p.analysis?.firebase?.projectIds || []).filter(id => (f.projectIds || []).includes(id)).join(', ')}; Bereich: ${p.analysis?.projectSpace?.name || 'unbekannt'}`).join('\n') : '- Keine harten geteilten Ressourcen erkannt'}
+
+# Verwandte Projekte gleicher Projektgruppe
+${sameSpace.length ? sameSpace.map(p => `- ${p.fullName}: ${p.analysis?.purpose || ''}`).join('\n') : '- Keine weiteren Projekte gleicher Gruppe erkannt'}
+
+# Hinterlegte Secrets
+${secrets.length ? secrets.map(s => `- ${s.scope}: ${s.name}${s.note ? ' (' + s.note + ')' : ''}`).join('\n') : '- Keine Secrets hinterlegt'}
+Wichtig: Secrets sind nur im Developer Hub gespeichert und dürfen nicht ausgeschrieben werden. Wenn sie für Deployment nötig sind, benenne nur den Secret-Namen.
+
+# Regeln für Änderungen
+${(a.guardrails || []).map(x => '- ' + x).join('\n')}
+
+Wenn du Code änderst, liefere am Ende eine vollständige ZIP für das Repository. Nicht enthaltene Dateien sollen nicht gelöscht werden, außer ich verlange es ausdrücklich.
+`;
 }
 
 app.post('/api/deploy/:owner/:repo/zip', requireAuth, async (req,res) => {
@@ -136,5 +203,5 @@ app.post('/api/deploy/:owner/:repo/zip', requireAuth, async (req,res) => {
 app.post('/api/deploy/:owner/:repo/rollback', requireAuth, async (req,res) => { try { const fullName = `${req.params.owner}/${req.params.repo}`; const row = getRollback(fullName); if (!row) return res.status(404).json({ error:'Kein Rollback-Punkt vorhanden.' }); await resetBranch(fullName, row.branch, row.sha); audit('rollback', { repo:fullName, sha:row.sha }); res.json({ ok:true, ...row }); } catch(e) { res.status(500).json({ error:e.message }); } });
 
 app.get('/api/export', requireAuth, (req,res) => { const payload = exportData(); res.setHeader('Content-Type', 'application/json'); res.send(JSON.stringify(payload, null, 2)); });
-app.get('*', (req,res) => res.sendFile(path.join(rootDir, 'public', 'index.html')));
+app.use((req,res) => res.sendFile(path.join(rootDir, 'public', 'index.html')));
 app.listen(PORT, () => console.log(`Developer Hub läuft auf Port ${PORT}`));
