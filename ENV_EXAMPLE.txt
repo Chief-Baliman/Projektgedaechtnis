@@ -1,0 +1,4 @@
+PORT=8787
+APP_ORIGIN=http://217.154.249.255:8080
+ADMIN_PASSWORD=BitteAendern
+ENCRYPTION_KEY=Mindestens32ZeichenLangerSchluessel

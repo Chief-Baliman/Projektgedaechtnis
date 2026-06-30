@@ -1,34 +1,366 @@
-const el = id => document.getElementById(id);
-let state={me:null,repos:[],projects:[],selectedRepo:null,selectedProject:null,tab:'overview',logs:[],filter:'all'};
-function log(m){state.logs.unshift(new Date().toLocaleTimeString('de-DE')+' '+m);render();}
-async function api(path,opt={}){const r=await fetch(path,{credentials:'include',headers:{...(opt.body instanceof ArrayBuffer?{'Content-Type':'application/zip'}:{'Content-Type':'application/json'}),...(opt.headers||{})},...opt,body:opt.body instanceof ArrayBuffer?opt.body:(opt.body?JSON.stringify(opt.body):undefined)});const t=await r.text();let d;try{d=t?JSON.parse(t):{}}catch{d={text:t}}if(!r.ok)throw new Error(d.error||d.message||t||r.statusText);return d;}
-async function init(){try{state.me=await api('/api/me');await loadProjects();render();}catch{renderLogin();}}
-function renderLogin(){document.body.innerHTML='<div id="app"></div>';el('app').innerHTML=`<div class="login card stack"><div class="brand">Chief Developer Hub</div><div class="muted">Login für dein Projektgedächtnis.</div><input id="pw" type="password" placeholder="Admin-Passwort" onkeydown="if(event.key==='Enter')login()"><button onclick="login()">Einloggen</button><div id="err" class="dangerTxt small"></div></div>`;}
-async function login(){try{await api('/api/auth/login',{method:'POST',body:{password:el('pw').value}});await init();}catch(e){el('err').textContent=e.message}}
-async function logout(){await api('/api/auth/logout',{method:'POST'});renderLogin();}
-async function saveToken(){try{await api('/api/settings/github-token',{method:'POST',body:{token:el('token').value}});el('token').value='';state.me=await api('/api/me');log('GitHub Token gespeichert.');}catch(e){alert(e.message)}}
-async function loadRepos(){try{log('Lade Repositories ...');const d=await api('/api/repos');state.repos=d.repos;log(d.repos.length+' Repositories geladen.');}catch(e){alert(e.message)}render();}
-async function loadProjects(){try{const d=await api('/api/projects');state.projects=d.projects||[];}catch{}}
-async function scanRepo(repo=state.selectedRepo){if(!repo)return;try{log('Scanne '+repo.fullName+' ...');const d=await api('/api/repos/scan',{method:'POST',body:{repo}});state.selectedProject=d.project;await loadProjects();log('Scan fertig: '+(d.filesRead||[]).length+' Dateien gelesen.');}catch(e){alert(e.message)}render();}
-async function scanAll(){if(!confirm('Alle Repositories scannen? Das kann ein paar Minuten dauern.'))return;try{log('Starte Gesamtscan ...');const d=await api('/api/repos/scan-all',{method:'POST'});await loadProjects();log('Gesamtscan fertig: '+d.results.filter(x=>x.ok).length+' ok, '+d.results.filter(x=>!x.ok).length+' Fehler.');}catch(e){alert(e.message)}render();}
-async function openProject(fullName){let p=state.projects.find(x=>x.fullName===fullName);state.selectedProject=p;state.selectedRepo=p?.repo||state.repos.find(r=>r.fullName===fullName);state.tab='overview';render();}
-async function context(){if(!state.selectedProject)return;const [o,r]=state.selectedProject.fullName.split('/');try{const d=await api(`/api/context/${o}/${r}`);state.context=d.prompt;state.related=d.related;state.tab='context';render();}catch(e){alert(e.message)}}
-async function copyContext(){await navigator.clipboard.writeText(state.context||'');log('Kontext kopiert.');}
-async function saveNotes(){const [o,r]=state.selectedProject.fullName.split('/');const d=await api(`/api/projects/${o}/${r}/notes`,{method:'POST',body:{notes:el('notes').value,manualContext:el('manualContext').value,projectSpaceKey:el('projectSpaceKey').value}});state.selectedProject=d.project;await loadProjects();log('Projektinfos gespeichert.');render();}
-async function saveSecret(){try{await api('/api/secrets',{method:'POST',body:{scope:el('secScope').value||'global',name:el('secName').value,value:el('secValue').value,note:el('secNote').value}});el('secName').value='';el('secValue').value='';el('secNote').value='';await loadSecrets();log('Secret gespeichert.');}catch(e){alert(e.message)}}
-async function loadSecrets(){const d=await api('/api/secrets');state.secrets=d.secrets;state.tab='secrets';render();}
-async function delSecret(id){if(!confirm('Secret löschen?'))return;await api('/api/secrets/'+id,{method:'DELETE'});await loadSecrets();}
-async function deployZip(){const f=el('zip').files[0];if(!f||!state.selectedProject)return alert('ZIP und Projekt auswählen.');if(!confirm('ZIP in '+state.selectedProject.fullName+' hochladen? Nicht enthaltene Dateien bleiben bestehen.'))return;const buf=await f.arrayBuffer();const [o,r]=state.selectedProject.fullName.split('/');try{log('Lade ZIP hoch ...');const d=await api(`/api/deploy/${o}/${r}/zip`,{method:'POST',body:buf});log('Deploy fertig: '+d.changed.length+' Dateien geändert.');alert('Fertig. Rollback-Punkt: '+d.rollbackSha);}catch(e){alert(e.message)}}
-async function rollback(){if(!state.selectedProject)return;if(!confirm('Letzten Upload wirklich rückgängig machen? Das setzt den Branch zurück.'))return;const [o,r]=state.selectedProject.fullName.split('/');try{const d=await api(`/api/deploy/${o}/${r}/rollback`,{method:'POST'});log('Rollback auf '+d.sha+' durchgeführt.');}catch(e){alert(e.message)}}
-function groupKey(p){return p.analysis?.projectSpace?.key||'unknown'}
-function groupLabel(k){return ({chiefcards:'ChiefCards',quizt:'Quizt / Laura',server:'Server / Bots',unknown:'Unsortiert'})[k]||k}
-function groupClass(k){return 'space '+k}
-function filteredProjects(){return state.projects.filter(p=>state.filter==='all'||groupKey(p)===state.filter)}
-function render(){const app=el('app'); if(!app)return;app.innerHTML=`<div class="wrap"><div class="top"><div><div class="brand">Chief Developer Hub</div><div class="muted">Projektgedächtnis, sauber getrennte Projektwelten, GitHub-Scanner, Kontext und Deploy</div></div><div class="row"><a href="/api/export" target="_blank"><button class="secondary">Export</button></a><button class="secondary" onclick="logout()">Logout</button></div></div>${projectWorlds()}<div class="grid"><aside class="card stack"><h3>GitHub</h3><div class="small muted">Token einmal serverseitig speichern. Danach funktioniert es auf allen Geräten.</div><input id="token" type="password" placeholder="GitHub Token einfügen"><div class="row"><button onclick="saveToken()">Token speichern</button>${state.me?.oauthConfigured?'<a href="/api/auth/github/start"><button class="secondary">GitHub OAuth</button></a>':''}</div><div class="small ${state.me?.hasGithubToken?'ok':'warn'}">${state.me?.hasGithubToken?'Token vorhanden':'Kein Token gespeichert'}</div><hr><div class="row"><button onclick="loadRepos()">Repos laden</button><button class="secondary" onclick="scanAll()">Alle scannen</button></div><h3>Repos</h3><div class="stack">${state.repos.map(r=>`<div class="repo ${state.selectedRepo?.fullName===r.fullName?'active':''}" onclick='state.selectedRepo=${JSON.stringify(r).replaceAll("'","&apos;")};state.selectedProject=state.projects.find(p=>p.fullName===state.selectedRepo.fullName)||null;render()'><b>${r.name}</b><div class="small muted">${r.fullName}</div></div>`).join('')||'<div class="muted small">Noch keine Repos geladen.</div>'}</div><h3>Gespeicherte Projekte</h3><div class="filter row"><button class="secondary ${state.filter==='all'?'activeFilter':''}" onclick="state.filter='all';render()">Alle</button><button class="secondary ${state.filter==='quizt'?'activeFilter':''}" onclick="state.filter='quizt';render()">Quizt</button><button class="secondary ${state.filter==='chiefcards'?'activeFilter':''}" onclick="state.filter='chiefcards';render()">ChiefCards</button><button class="secondary ${state.filter==='server'?'activeFilter':''}" onclick="state.filter='server';render()">Server</button></div><div class="stack">${filteredProjects().map(p=>`<div class="repo" onclick="openProject('${p.fullName}')"><b>${p.repo?.name||p.fullName}</b><span class="${groupClass(groupKey(p))}">${groupLabel(groupKey(p))}</span><div class="small muted">${p.analysis?.purpose||''}</div></div>`).join('')||'<div class="muted small">Noch nichts gescannt.</div>'}</div></aside><main class="card">${main()}</main></div><div class="card" style="margin-top:18px"><h3>Log</h3>${state.logs.slice(0,8).map(x=>`<div class="log">${x}</div>`).join('')||'<div class="muted small">Noch keine Aktionen.</div>'}</div></div>`;}
-function projectWorlds(){const counts=state.projects.reduce((a,p)=>(a[groupKey(p)]=(a[groupKey(p)]||0)+1,a),{});return `<div class="worlds"><div class="world chiefcards"><b>ChiefCards / Fabian</b><span>${counts.chiefcards||0} Projekte</span></div><div class="world quizt"><b>Quizt / Laura</b><span>${counts.quizt||0} Projekte, extern getrennt</span></div><div class="world server"><b>Server / Bots</b><span>${counts.server||0} Dienste</span></div><div class="world unknown"><b>Unsortiert</b><span>${counts.unknown||0} prüfen</span></div></div>`}
-function main(){if(!state.selectedRepo&&!state.selectedProject)return `<h2>Start</h2><p class="muted">Token speichern, Repos laden, Projekt auswählen und scannen.</p><p class="muted">Wichtig: Quizt wird als eigene Projektwelt behandelt und nicht mit ChiefCards vermischt.</p>`;const p=state.selectedProject;const r=state.selectedRepo||p?.repo;return `<div class="row" style="justify-content:space-between"><div><h2>${r.fullName}</h2><div class="muted">${r.htmlUrl||''}</div>${p?`<span class="${groupClass(groupKey(p))}">${p.analysis?.projectSpace?.name||'Unsortiert'}</span>`:''}</div><div class="row"><button onclick="scanRepo()">Projekt scannen</button>${p?'<button class="secondary" onclick="context()">Kontext erstellen</button>':''}</div></div>${p?tabs()+tabContent(p):'<p class="muted">Dieses Repository wurde noch nicht gescannt.</p>'}`;}
-function tabs(){const t=[['overview','Übersicht'],['wiki','Wiki'],['context','ChatGPT'],['deploy','Deploy'],['debug','Scanner Debug'],['notes','Notizen'],['secrets','Secrets']];return `<div class="tabs">${t.map(x=>`<button class="tab ${state.tab===x[0]?'active':''}" onclick="state.tab='${x[0]}';${x[0]==='secrets'?'loadSecrets()':'render()'}">${x[1]}</button>`).join('')}</div>`;}
-function tabContent(p){const a=p.analysis||{};if(state.tab==='debug')return `<div class="stack"><h3>Scanner Debug</h3><p class="muted">Hier siehst du, ob der Code wirklich gelesen wurde. Entscheidend sind Datei-Inventar, Fakten und Belege.</p><h4>Klassifizierung</h4><pre>${escapeHtml(JSON.stringify(a.classification||{}, null, 2))}</pre><h4>Datei-Inventar</h4><pre>${escapeHtml(JSON.stringify((a.inventory?.files||[]).slice(0,120), null, 2))}</pre><h4>Top-Dateien nach Fakten</h4><pre>${escapeHtml(JSON.stringify((a.codeInsights?.debug?.topFilesByFacts||[]).slice(0,80), null, 2))}</pre><h4>Code-Fakten</h4><pre>${escapeHtml(JSON.stringify((a.codeInsights?.debug?.facts||[]).slice(0,300), null, 2))}</pre></div>`;if(state.tab==='wiki')return `<pre>${escapeHtml(a.wiki||'Kein Wiki')}</pre>`;if(state.tab==='context')return `<div class="stack"><button onclick="copyContext()">Kontext kopieren</button><pre>${escapeHtml(state.context||'Noch nicht erstellt. Klicke oben auf Kontext erstellen.')}</pre></div>`;if(state.tab==='deploy')return `<div class="stack"><h3>ZIP-Deploy</h3><div class="muted">Überschreibt nur Dateien aus der ZIP. Andere Dateien bleiben bestehen. Vorher wird ein Rollback-Punkt gespeichert.</div><input id="zip" type="file" accept=".zip,application/zip"><div class="row"><button onclick="deployZip()">ZIP hochladen</button><button class="danger" onclick="rollback()">Letzten Upload rückgängig</button></div></div>`;if(state.tab==='notes')return `<div class="stack"><label>Projektgruppe</label><select id="projectSpaceKey"><option value="quizt" ${groupKey(p)==='quizt'?'selected':''}>Quizt / Laura, extern getrennt</option><option value="chiefcards" ${groupKey(p)==='chiefcards'?'selected':''}>ChiefCards / Fabian</option><option value="server" ${groupKey(p)==='server'?'selected':''}>Server / Bots</option><option value="unknown" ${groupKey(p)==='unknown'?'selected':''}>Unsortiert</option></select><label>Notizen</label><textarea id="notes">${escapeHtml(p.notes||'')}</textarea><label>Zusätzlicher Kontext</label><textarea id="manualContext">${escapeHtml(p.manualContext||'')}</textarea><button onclick="saveNotes()">Speichern</button></div>`;if(state.tab==='secrets')return `<div class="stack"><h3>Secrets</h3><div class="split"><input id="secScope" value="${p.fullName}"><input id="secName" placeholder="Name, z. B. TELEGRAM_BOT_TOKEN"></div><input id="secValue" type="password" placeholder="Wert"><input id="secNote" placeholder="Notiz"><button onclick="saveSecret()">Secret speichern</button><div class="stack">${(state.secrets||[]).map(s=>`<div class="repo"><b>${s.scope}: ${s.name}</b><div class="small muted">${s.note||''}</div><button class="danger" onclick="delSecret('${s.id}')">Löschen</button></div>`).join('')||'<div class="muted">Noch keine Secrets geladen.</div>'}</div></div>`;return overview(p);}
-function overview(p){const a=p.analysis||{};const f=a.firebase||{};return `<div class="stack">${a.analyzerVersion!=='5.0-real-code-reader'?'<section class="notice"><b>Alter Scan</b><br>Dieses Projekt wurde noch nicht mit Scanner v5 analysiert. Bitte Projekt scannen klicken.</section>':''}<section class="notice ${groupKey(p)==='quizt'?'quiztNotice':''}"><b>${a.projectSpace?.name||'Projektgruppe unklar'}</b><br>${escapeHtml(a.projectSpace?.separation||'')}</section><div><b>Scanner</b><p class="muted">Version: ${escapeHtml(a.analyzerVersion||'alt/unklar')}<br>Konfidenz: ${escapeHtml(a.scanQuality?.confidence||'unklar')}<br>Top-Domäne: ${escapeHtml(a.scanQuality?.topDomain||'unklar')} (${a.scanQuality?.topDomainScore||0})<br>Fingerprint: ${escapeHtml(a.sourceAudit?.contentFingerprint||'kein Fingerprint')}<br>Gelesene Dateien: ${a.sourceAudit?.filesWithContent||0}/${a.sourceAudit?.filesRequested||0}, Code-Dateien: ${a.sourceAudit?.codeFilesWithContent||0}</p></div><div><b>Zweck</b><p>${escapeHtml(a.purpose||'')}</p></div><div><b>Besitz- und Kontextregeln</b><ul>${(a.ownershipNotes||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul></div><div><b>Technik</b><div>${(a.tech||[]).map(x=>`<span class="pill">${x}</span>`).join('')}</div></div><div><b>Firebase</b><p class="muted">IDs: ${(f.projectIds||[]).join(', ')||'keine'}<br>Pfade: ${(f.paths||[]).join(', ')||'keine'}${(f.dynamicPaths||[]).length?'<br>Dynamische Pfade: '+f.dynamicPaths.join(', '):''}<br>Geteilt mit: ${(f.sharedWith||[]).map(x=>`${x.fullName} (${x.space})`).join(', ')||'nichts erkannt'}</p></div><div><b>Architektur</b><ul>${(a.architecture||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join('')}</ul></div><div><b>Code-Signatur</b><p class="muted">Domänen: ${(a.codeInsights?.domains||[]).join(', ')||'keine'}<br>Signatur: ${(a.codeInsights?.signature||[]).slice(0,16).join(', ')||'keine'}<br>Scan-Qualität: ${a.scanQuality?.confidence||a.scanQuality?.quality||'unbekannt'} (${a.scanQuality?.extractedSignals||0} Code-Signale aus ${a.scanQuality?.filesRead||0} Dateien)<br>Top: ${a.scanQuality?.topDomain||'unbekannt'} (${a.scanQuality?.topDomainScore||0}), zweites Signal: ${a.scanQuality?.secondDomain||'keins'} (${a.scanQuality?.secondDomainScore||0})</p></div><div><b>Roh-Code-Fakten</b><ul>${(a.codeInsights?.codeFacts||[]).slice(0,30).map(f=>`<li><code>${escapeHtml(f.kind)}</code> ${escapeHtml(f.file)}:${f.line} – ${escapeHtml(f.match)}<br><span class="muted small">${escapeHtml(f.snippet)}</span></li>`).join('')||'<li>Keine Roh-Code-Fakten erkannt</li>'}</ul></div><div><b>Erkannte Funktionen / UI</b><p class="muted">Funktionen: ${(a.codeInsights?.functions||[]).slice(0,20).join(', ')||'keine'}<br>UI: ${(a.codeInsights?.uiLabels||[]).slice(0,20).join(', ')||'keine'}</p></div><div><b>Datenmodelle / Routen</b><p class="muted">${(a.dataModel||[]).join(', ')||'keine Datenmodelle erkannt'}<br>${(a.routes||[]).join(', ')||'keine Routen erkannt'}</p></div><div><b>Datei-Zusammenfassung</b><ul>${(a.codeInsights?.fileSummaries||[]).slice(0,20).map(x=>`<li>${escapeHtml(x)}</li>`).join('')||'<li>Keine Datei-Zusammenfassung erkannt</li>'}</ul></div><div class="health">${(a.health||[]).map(h=>`<div><b>${h.label}</b><br><span class="${h.status==='ok'?'ok':h.status==='danger'?'dangerTxt':h.status==='warn'?'warn':'muted'}">${h.status}</span></div>`).join('')}</div></div>`;}
-function escapeHtml(s){return String(s||'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
-init();
+const state = {
+  session: localStorage.getItem('dh_session') || '',
+  repos: [],
+  selectedRepo: '',
+  scan: null,
+  tab: 'overview',
+  message: '',
+  error: '',
+  settings: null,
+  projects: [],
+  resources: []
+};
+
+const GROUPS = {
+  'chiefcards': 'ChiefCards',
+  'chiefbaliman': 'ChiefBaliman',
+  'quizt-laura': 'Quizt / Laura',
+  'infrastruktur': 'Infrastruktur',
+  'privat': 'Privat',
+  'unsortiert': 'Unsortiert'
+};
+
+const app = document.getElementById('app');
+
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    ...options,
+    headers: {
+      ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(state.session ? { Authorization: `Bearer ${state.session}` } : {}),
+      ...(options.headers || {})
+    }
+  });
+  const text = await res.text();
+  let data = text;
+  try { data = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) throw new Error(data?.error || text || `Fehler ${res.status}`);
+  return data;
+}
+
+function render() {
+  if (!state.session) return renderLogin();
+  app.innerHTML = `
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">Developer Hub</div>
+        <div class="sub">Projektgedächtnis, Code-Scanner, Kontextgenerator und Deployment.</div>
+        <div style="height:14px"></div>
+        <div class="card">
+          <div class="stack">
+            <button onclick="loadRepos()">Repositories laden</button>
+            <button class="secondary" onclick="loadProjects()">Projektgraph laden</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="meta">GitHub Token</div>
+          <div class="row">
+            <input id="tokenInput" type="password" placeholder="Token einfügen">
+            <button onclick="saveToken()">Speichern</button>
+          </div>
+          <div class="meta" style="margin-top:8px">${state.settings?.hasGithubToken ? `Gespeichert: ${escapeHtml(state.settings.githubTokenHint || 'ja')}` : 'Noch kein Token gespeichert'}</div>
+        </div>
+        <div class="card">
+          <input id="repoSearch" placeholder="Repo suchen" oninput="renderRepoList()">
+          <div id="repoList" style="margin-top:10px"></div>
+        </div>
+      </aside>
+      <main class="main">
+        ${state.message ? `<div class="success">${escapeHtml(state.message)}</div>` : ''}
+        ${state.error ? `<div class="error">${escapeHtml(state.error)}</div>` : ''}
+        <div id="mainContent"></div>
+      </main>
+    </div>`;
+  renderRepoList();
+  renderMain();
+}
+
+function renderLogin() {
+  app.innerHTML = `
+    <div class="login">
+      <h1>Chief Developer Hub</h1>
+      <p class="meta">Login mit dem Admin-Passwort aus deiner .env.</p>
+      <div class="stack">
+        <input id="password" type="password" placeholder="Admin-Passwort" onkeydown="if(event.key==='Enter') login()">
+        <button onclick="login()">Einloggen</button>
+      </div>
+      ${state.error ? `<div class="error" style="margin-top:12px">${escapeHtml(state.error)}</div>` : ''}
+    </div>`;
+}
+
+async function login() {
+  try {
+    state.error = '';
+    const password = document.getElementById('password').value;
+    const data = await api('/api/login', { method:'POST', body:JSON.stringify({ password }) });
+    state.session = data.session;
+    state.settings = data.settings;
+    localStorage.setItem('dh_session', state.session);
+    await loadProjects(false);
+    render();
+  } catch(e) { state.error = e.message; renderLogin(); }
+}
+
+async function saveToken() {
+  try {
+    const token = document.getElementById('tokenInput').value.trim();
+    const data = await api('/api/github/token', { method:'POST', body:JSON.stringify({ token }) });
+    state.settings = data.settings;
+    state.message = 'GitHub Token gespeichert.';
+    state.error = '';
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function loadRepos() {
+  try {
+    state.message = 'Repositories werden geladen...'; state.error = ''; render();
+    state.repos = await api('/api/github/repos');
+    state.message = `${state.repos.length} Repositories geladen.`;
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function loadProjects(doRender = true) {
+  try {
+    const data = await api('/api/projects');
+    state.projects = data.projects || [];
+    state.resources = data.resources || [];
+    if (doRender) render();
+  } catch(e) { if (doRender) showError(e); }
+}
+
+function renderRepoList() {
+  const el = document.getElementById('repoList');
+  if (!el) return;
+  const q = (document.getElementById('repoSearch')?.value || '').toLowerCase();
+  const repos = state.repos.filter(r => !q || r.fullName.toLowerCase().includes(q)).slice(0, 100);
+  el.innerHTML = repos.map(r => `<div class="repo ${state.selectedRepo === r.fullName ? 'active' : ''}" onclick="selectRepo('${escapeAttr(r.fullName)}')">
+    <strong>${escapeHtml(r.name)}</strong><br><span class="meta">${escapeHtml(r.fullName)}</span>
+  </div>`).join('') || '<div class="meta">Noch keine Repos geladen.</div>';
+}
+
+async function selectRepo(fullName) {
+  state.selectedRepo = fullName;
+  state.scan = null;
+  state.tab = 'overview';
+  render();
+  try {
+    const [owner, repo] = fullName.split('/');
+    state.scan = await api(`/api/projects/${owner}/${repo}/scan`);
+    render();
+  } catch(e) {
+    state.error = 'Noch kein Scan vorhanden. Bitte scannen.';
+    render();
+  }
+}
+
+function renderMain() {
+  const el = document.getElementById('mainContent');
+  if (!el) return;
+  if (!state.selectedRepo) {
+    el.innerHTML = renderDashboard();
+    return;
+  }
+  const scan = state.scan;
+  el.innerHTML = `
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div>
+          <h1 style="margin:0">${escapeHtml(state.selectedRepo)}</h1>
+          <div class="meta">${scan ? `Scanner: ${escapeHtml(scan.scannerVersion)} · ${escapeHtml(scan.scannedAt)}` : 'Noch nicht gescannt'}</div>
+        </div>
+        <div class="row">
+          <button onclick="scanRepo()">Projekt scannen</button>
+          <button class="secondary" onclick="loadScan()">Scan neu laden</button>
+        </div>
+      </div>
+    </div>
+    ${scan ? renderProject(scan) : `<div class="notice">Noch kein Scan. Klicke auf Projekt scannen.</div>`}`;
+}
+
+function renderDashboard() {
+  return `
+    <div class="grid">
+      <div class="card"><h2>Projekte</h2><div class="meta">${state.projects.length} gespeicherte Projekte</div></div>
+      <div class="card"><h2>Ressourcen</h2><div class="meta">${state.resources.length} erkannte Ressourcen</div></div>
+      <div class="card"><h2>Scanner</h2><div class="meta">Echte Datei-Inventur, AST, HTML, JSON, Firebase-Regeln und Debug-Belege.</div></div>
+    </div>
+    <div class="card">
+      <h2>Projektgruppen</h2>
+      ${Object.entries(GROUPS).map(([k,v]) => `<span class="pill">${escapeHtml(v)}</span>`).join('')}
+    </div>
+    <div class="card">
+      <h2>Ressourcen-Graph</h2>
+      ${state.resources.length ? `<table class="table"><tr><th>Typ</th><th>Wert</th><th>Projekte</th></tr>${state.resources.slice(0,80).map(r => `<tr><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.value)}</td><td>${escapeHtml((r.projects||[]).join(', '))}</td></tr>`).join('')}</table>` : '<div class="meta">Noch keine Ressourcen erkannt.</div>'}
+    </div>`;
+}
+
+function renderProject(scan) {
+  const tabs = ['overview','wiki','chatgpt','debug','facts','files','deploy','notes','secrets'];
+  const names = { overview:'Übersicht', wiki:'Wiki', chatgpt:'ChatGPT', debug:'Scanner Debug', facts:'Code-Fakten', files:'Dateien', deploy:'Deploy', notes:'Notizen', secrets:'Secrets' };
+  return `
+    <div class="tabs">${tabs.map(t => `<button class="tab ${state.tab===t?'active':''}" onclick="setTab('${t}')">${names[t]}</button>`).join('')}</div>
+    <div>${renderTab(scan)}</div>`;
+}
+
+function renderTab(scan) {
+  if (state.tab === 'overview') return renderOverview(scan);
+  if (state.tab === 'wiki') return `<div class="card"><div class="row"><button onclick="copyText(${JSON.stringify(scan.wiki)})">Wiki kopieren</button></div><pre>${escapeHtml(scan.wiki)}</pre></div>`;
+  if (state.tab === 'chatgpt') return `<div class="card"><div class="row"><button onclick="copyText(${JSON.stringify(scan.chatgptContext)})">Kontext kopieren</button></div><pre>${escapeHtml(scan.chatgptContext)}</pre></div>`;
+  if (state.tab === 'debug') return renderDebug(scan);
+  if (state.tab === 'facts') return renderFacts(scan.facts || []);
+  if (state.tab === 'files') return renderFiles(scan);
+  if (state.tab === 'deploy') return renderDeploy(scan);
+  if (state.tab === 'notes') return renderNotes(scan);
+  if (state.tab === 'secrets') return renderSecrets();
+  return '';
+}
+
+function renderOverview(scan) {
+  const confidence = Math.round((scan.purpose?.confidence || 0) * 100);
+  return `
+    <div class="grid">
+      <div class="card">
+        <h2>Zweck</h2>
+        <p>${escapeHtml(scan.purpose?.text || '')}</p>
+        <div class="progress"><span style="width:${confidence}%"></span></div>
+        <div class="meta">Sicherheit: ${confidence} % · Gruppe: ${escapeHtml(GROUPS[scan.projectGroup] || scan.projectGroup)}</div>
+      </div>
+      <div class="card"><h2>Inventar</h2><div class="kv"><b>Dateien</b><span>${scan.inventory.totalFiles}</span></div><div class="kv"><b>Gelesen</b><span>${scan.inventory.readFiles}</span></div><div class="kv"><b>Bytes</b><span>${scan.inventory.totalBytesRead}</span></div></div>
+      <div class="card"><h2>Architektur</h2>${(scan.architecture||[]).map(a => `<span class="pill ok">${escapeHtml(a)}</span>`).join('') || '<div class="meta">Keine erkannt</div>'}</div>
+    </div>
+    ${scan.conflicts?.length ? `<div class="error"><b>Konflikte</b><br>${scan.conflicts.map(escapeHtml).join('<br>')}</div>` : ''}
+    <div class="card"><h2>Ressourcen</h2>${(scan.resources||[]).map(r => `<span class="pill">${escapeHtml(r.label)}: ${escapeHtml(r.value)}</span>`).join('') || '<div class="meta">Keine Ressourcen erkannt.</div>'}</div>
+    <div class="card"><h2>Scores</h2>${(scan.scores||[]).map(s => `<div class="kv"><b>${escapeHtml(s.label)}</b><span>${s.score}</span></div>`).join('')}</div>
+    <div class="card"><h2>Wichtigste Belege</h2>${renderFactList((scan.purpose?.evidence || []).slice(0,10))}</div>`;
+}
+
+function renderDebug(scan) {
+  const d = scan.debug || {};
+  return `
+    <div class="notice">${escapeHtml(d.proof || '')}</div>
+    <div class="grid">
+      <div class="card"><h2>Dateien gelesen</h2><pre>${escapeHtml(JSON.stringify(d.fileReadSummary, null, 2))}</pre></div>
+      <div class="card"><h2>Parser</h2><pre>${escapeHtml(JSON.stringify(d.parserSummary, null, 2))}</pre></div>
+    </div>
+    <div class="card"><h2>Score-Belege</h2><pre>${escapeHtml(JSON.stringify(d.scores, null, 2))}</pre></div>
+    <div class="card"><h2>Top Fakten</h2>${renderFactList(d.topFacts || [])}</div>`;
+}
+
+function renderFacts(facts) { return `<div class="card"><h2>${facts.length} Code-Fakten</h2>${renderFactList(facts)}</div>`; }
+
+function renderFactList(facts) {
+  return facts.map(f => `<div class="fact">
+    <div class="fact-head"><strong>${escapeHtml(f.category)}/${escapeHtml(f.type)}</strong><span class="pill">Stärke ${escapeHtml(f.strength || '')}</span></div>
+    <div>${escapeHtml(f.value || '')}</div>
+    <div class="meta">${escapeHtml(f.file || '')}${f.line ? `:${f.line}` : ''} · ${escapeHtml(f.reason || '')}</div>
+    ${f.snippet ? `<div class="snippet">${escapeHtml(f.snippet)}</div>` : ''}
+  </div>`).join('') || '<div class="meta">Keine Fakten.</div>';
+}
+
+function renderFiles(scan) {
+  const files = scan.inventory.files || [];
+  return `<div class="card"><h2>Datei-Inventar</h2><table class="table"><tr><th>Datei</th><th>Sprache</th><th>Zeilen</th><th>Status</th></tr>${files.slice(0,500).map(f => `<tr><td>${escapeHtml(f.path)}</td><td>${escapeHtml(f.language)}</td><td>${escapeHtml(f.lines || '')}</td><td>${f.read ? '<span class="pill ok">gelesen</span>' : `<span class="pill warn">${escapeHtml(f.skippedReason || 'übersprungen')}</span>`}</td></tr>`).join('')}</table></div>`;
+}
+
+function renderDeploy(scan) {
+  return `<div class="card"><h2>ZIP Deploy</h2><p class="meta">Überschreibt Dateien aus der ZIP. Löscht keine vorhandenen Dateien. Speichert vorher einen Rollback-Punkt.</p><div class="row"><input id="zipFile" type="file" accept=".zip"><button onclick="deployZip()">ZIP deployen</button><button class="danger" onclick="rollback()">Letzten Upload rückgängig</button></div><div id="deployResult"></div></div>`;
+}
+
+function renderNotes(scan) {
+  return `<div class="card"><h2>Projektgruppe</h2><select id="groupSelect">${Object.entries(GROUPS).map(([k,v]) => `<option value="${k}" ${scan.projectGroup===k?'selected':''}>${escapeHtml(v)}</option>`).join('')}</select><button style="margin-top:10px" onclick="saveGroup()">Gruppe speichern</button></div><div class="card"><h2>Notizen</h2><textarea id="noteText" placeholder="Projektwissen, Besonderheiten, Entscheidungen..."></textarea><button onclick="saveNote()">Notiz speichern</button></div>`;
+}
+
+function renderSecrets() {
+  return `<div class="card"><h2>Secrets</h2><p class="meta">Werte werden serverseitig verschlüsselt gespeichert.</p><div class="grid"><input id="secretName" placeholder="Name"><input id="secretValue" placeholder="Wert" type="password"></div><button style="margin-top:10px" onclick="saveSecret()">Secret speichern</button><div id="secretList"></div></div>`;
+}
+
+function setTab(t) { state.tab = t; renderMain(); if (t === 'notes') loadNote(); if (t === 'secrets') loadSecrets(); }
+
+async function scanRepo() {
+  try {
+    state.message = 'Scan läuft. Das kann je nach Repo etwas dauern...'; state.error = ''; render();
+    const [owner, repo] = state.selectedRepo.split('/');
+    state.scan = await api(`/api/projects/${owner}/${repo}/scan`, { method:'POST' });
+    state.message = 'Scan fertig.';
+    await loadProjects(false);
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function loadScan() {
+  try {
+    const [owner, repo] = state.selectedRepo.split('/');
+    state.scan = await api(`/api/projects/${owner}/${repo}/scan`);
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function saveGroup() {
+  try {
+    const group = document.getElementById('groupSelect').value;
+    await api('/api/projects/group', { method:'POST', body:JSON.stringify({ fullName:state.selectedRepo, group }) });
+    state.scan.projectGroup = group;
+    state.message = 'Projektgruppe gespeichert.'; render();
+  } catch(e) { showError(e); }
+}
+
+async function loadNote() {
+  try {
+    const [owner, repo] = state.selectedRepo.split('/');
+    const note = await api(`/api/projects/${owner}/${repo}/note`);
+    const el = document.getElementById('noteText'); if (el) el.value = note.text || '';
+  } catch {}
+}
+async function saveNote() {
+  try {
+    const [owner, repo] = state.selectedRepo.split('/');
+    await api(`/api/projects/${owner}/${repo}/note`, { method:'POST', body:JSON.stringify({ text:document.getElementById('noteText').value }) });
+    state.message = 'Notiz gespeichert.'; render();
+  } catch(e) { showError(e); }
+}
+
+async function deployZip() {
+  try {
+    const file = document.getElementById('zipFile').files[0];
+    if (!file) throw new Error('Bitte ZIP auswählen.');
+    const fd = new FormData(); fd.append('zip', file);
+    const [owner, repo] = state.selectedRepo.split('/');
+    const data = await api(`/api/deploy/${owner}/${repo}/zip`, { method:'POST', body:fd });
+    document.getElementById('deployResult').innerHTML = `<div class="success">${data.changed.length} Dateien geändert. Rollback: ${escapeHtml(data.rollbackSha)}</div>`;
+  } catch(e) { document.getElementById('deployResult').innerHTML = `<div class="error">${escapeHtml(e.message)}</div>`; }
+}
+async function rollback() {
+  try {
+    if (!confirm('Letzten Upload wirklich rückgängig machen?')) return;
+    const [owner, repo] = state.selectedRepo.split('/');
+    const data = await api(`/api/deploy/${owner}/${repo}/rollback`, { method:'POST' });
+    alert(`Rollback auf ${data.sha} ausgeführt.`);
+  } catch(e) { alert(e.message); }
+}
+
+async function saveSecret() {
+  try {
+    await api('/api/secrets', { method:'POST', body:JSON.stringify({ name:document.getElementById('secretName').value, value:document.getElementById('secretValue').value }) });
+    await loadSecrets();
+  } catch(e) { showError(e); }
+}
+async function loadSecrets() {
+  try {
+    const list = await api('/api/secrets');
+    const el = document.getElementById('secretList'); if (!el) return;
+    el.innerHTML = list.map(s => `<div class="fact"><strong>${escapeHtml(s.name)}</strong><div class="meta">${escapeHtml(s.hint || '')} · ${escapeHtml(s.updatedAt || '')}</div></div>`).join('') || '<div class="meta">Keine Secrets.</div>';
+  } catch(e) { showError(e); }
+}
+
+async function copyText(text) { await navigator.clipboard.writeText(text || ''); alert('Kopiert.'); }
+function showError(e) { state.error = e.message; state.message = ''; render(); }
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function escapeAttr(s) { return escapeHtml(s).replace(/'/g, '&#39;'); }
+
+if (state.session) {
+  api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
+} else render();
+
+window.login = login; window.saveToken = saveToken; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.renderRepoList = renderRepoList;
