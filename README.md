@@ -1,31 +1,28 @@
-# Chief Developer Hub v2.2
+# Chief Developer Hub v3.0
 
-Lauffähiger Developer Hub mit Server-Login, verschlüsseltem GitHub-Token, Repository-Scanner, Projektgedächtnis, ChatGPT-Kontext und ZIP-Deploy.
+Stand: Scanner neu aufgebaut.
 
-## Neu in v2.2
+## Wichtigste Änderung
+Der Scanner arbeitet jetzt nicht mehr nur mit groben Regex-Signalen, sondern erzeugt zuerst ein Roh-Inventar:
 
-- echtere Codeanalyse statt generischer Projekttexte
-- Code-Signatur pro Repository
-- Erkennung von App-Domänen wie Angebots-Tracking, Queue-Verwaltung, Scoreboard, Market-Tools
-- Angebots-Tracker wird nicht mehr als Queue-Tracker beschrieben, wenn Angebot/Offer/Deal-Signale vorhanden sind
-- Anzeige von erkannten Funktionen, UI-Texten, State-Keys und Datei-Zusammenfassungen
-- ChatGPT-Kontext enthält Scanner-Signale und Scan-Qualität
-- Guardrails warnen vor falscher Projektlogik, z. B. Angebot nicht als Queue behandeln
+- gelesene Dateien
+- Content-Hash je Datei
+- Zeilenanzahl
+- Treffer mit Datei, Zeile und Snippet
+- feste Firebase-Pfade getrennt von dynamischen Firebase-Pfaden
+- Domain-Scores auf Basis echter Code-Funde
+- Konflikte zwischen Repo-Name und Code-Signalen
 
-## Update auf dem VPS
+Wenn ein Repo wie `angebots-tracker` in Wirklichkeit Queue-Code enthält, wird das als Konflikt markiert und mit Code-Belegen angezeigt.
 
-Nach Upload der entpackten Dateien ins GitHub-Repository:
+## Update auf VPS
 
 ```bash
 cd /opt/projects/developer-hub
 git pull
 npm install
-```
-
-Falls der Server noch im Terminal läuft, mit STRG+C stoppen und danach neu starten:
-
-```bash
+# laufenden npm-start-Prozess mit STRG+C beenden
 npm start
 ```
 
-Danach im Hub die betroffenen Projekte neu scannen. Für geteilte Ressourcen am besten einmal „Alle scannen“ ausführen.
+Danach im Hub das betroffene Repository neu scannen.
