@@ -7,7 +7,7 @@ import cors from 'cors';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { PORT, APP_ORIGIN, ADMIN_PASSWORD } from './config.js';
-import { audit, exportData, getAllProjects, getFirebaseAggregate, getFirebaseDocs, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, listSecrets, revealSecret, saveAiSettings, saveFirebaseDoc, saveGithubToken, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
+import { audit, exportData, getAllProjects, buildFirebaseContext, buildServerContext, getFirebaseAggregate, getFirebaseDocs, getFirebaseRulesLibrary, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, getServerDocs, listSecrets, revealSecret, saveAiSettings, saveFirebaseDoc, saveGithubToken, saveServerDoc, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
 import { estimateAiAnalysis, getAiProviders, runAiAnalysis } from './aiAnalyzer.js';
 import { listRepos, getBranchHead, putFile, resetBranch } from './github.js';
 import { scanRepository, SCANNER_VERSION } from './scanner/index.js';
@@ -69,9 +69,18 @@ app.get('/api/server/inventory', requireAuth, async (req,res) => {
   catch(e) { console.error(e); res.status(500).json({ error:e.message }); }
 });
 
+app.get('/api/server/docs', requireAuth, (req,res) => res.json({ docs:getServerDocs() }));
+app.post('/api/server/docs', requireAuth, (req,res) => { saveServerDoc(req.body?.key, req.body || {}); res.json({ ok:true, docs:getServerDocs() }); });
+app.get('/api/server/context', requireAuth, async (req,res) => {
+  try { res.json({ context: buildServerContext(await getServerInventory()), docs:getServerDocs() }); }
+  catch(e) { res.status(500).json({ error:e.message }); }
+});
+
 app.get('/api/firebase/aggregate', requireAuth, (req,res) => res.json(getFirebaseAggregate()));
 app.get('/api/firebase/docs', requireAuth, (req,res) => res.json(getFirebaseDocs()));
-app.post('/api/firebase/docs', requireAuth, (req,res) => { saveFirebaseDoc(req.body?.key, req.body || {}); res.json({ ok:true, docs:getFirebaseDocs() }); });
+app.get('/api/firebase/rules', requireAuth, (req,res) => res.json({ rules:getFirebaseRulesLibrary() }));
+app.get('/api/firebase/context', requireAuth, (req,res) => res.json({ context:buildFirebaseContext(), docs:getFirebaseDocs(), aggregate:getFirebaseAggregate() }));
+app.post('/api/firebase/docs', requireAuth, (req,res) => { saveFirebaseDoc(req.body?.key, req.body || {}); res.json({ ok:true, docs:getFirebaseDocs(), aggregate:getFirebaseAggregate(), rules:getFirebaseRulesLibrary() }); });
 
 app.post('/api/projects/group', requireAuth, (req,res) => { setProjectGroup(req.body.fullName, req.body.group); res.json({ ok:true }); });
 app.get('/api/projects/:owner/:repo/scan', requireAuth, (req,res) => { const fullName = `${req.params.owner}/${req.params.repo}`; const scan = getScan(fullName); if (!scan) return res.status(404).json({ error:'Noch kein Scan vorhanden.' }); res.json(scan); });

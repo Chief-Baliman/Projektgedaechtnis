@@ -16,6 +16,7 @@ const initialDb = {
   notes: {},
   resources: {},
   firebaseDocs: {},
+  serverDocs: {},
   updatedAt: null
 };
 
@@ -218,19 +219,170 @@ export function getRollback(fullName) {
 }
 
 
+function normalizeList(value) {
+  if (Array.isArray(value)) return value.map(x => String(x).trim()).filter(Boolean);
+  return String(value || '').split(/\r?\n|,/).map(x => x.trim()).filter(Boolean);
+}
+
+function parseFirebaseRulesText(text) {
+  const raw = String(text || '').trim();
+  const result = { format: raw ? 'text' : 'empty', paths: [], readWrite: [], warnings: [] };
+  if (!raw) return result;
+  try {
+    const json = JSON.parse(raw);
+    result.format = 'json';
+    const rules = json.rules || json;
+    const walk = (node, prefix = '') => {
+      if (!node || typeof node !== 'object') return;
+      const entry = { path: prefix || '/', read: null, write: null, validate: null, indexOn: null };
+      let hasRule = false;
+      for (const [key, value] of Object.entries(node)) {
+        if (key === '.read') { entry.read = String(value); hasRule = true; }
+        else if (key === '.write') { entry.write = String(value); hasRule = true; }
+        else if (key === '.validate') { entry.validate = String(value); hasRule = true; }
+        else if (key === '.indexOn') { entry.indexOn = Array.isArray(value) ? value.join(', ') : String(value); hasRule = true; }
+      }
+      if (prefix && !result.paths.includes(prefix)) result.paths.push(prefix);
+      if (hasRule) result.readWrite.push(entry);
+      for (const [key, value] of Object.entries(node)) {
+        if (key.startsWith('.')) continue;
+        const next = prefix ? `${prefix}/${key}` : key;
+        walk(value, next);
+      }
+    };
+    walk(rules, '');
+  } catch (e) {
+    result.format = 'rules_or_text';
+    const lines = raw.split(/\r?\n/);
+    lines.forEach((line, idx) => {
+      const match = line.match(/match\s+\/([^\s{]+)/);
+      if (match) result.paths.push(match[1]);
+      const pathLike = line.match(/["']([A-Za-z0-9_$-]+(?:\/[A-Za-z0-9_$-]+)+)["']/);
+      if (pathLike) result.paths.push(pathLike[1]);
+      if (/allow\s+read|\.read|allow\s+write|\.write/.test(line)) {
+        result.readWrite.push({ path: result.paths[result.paths.length - 1] || '/', line: idx + 1, rule: line.trim() });
+      }
+    });
+    if (!result.paths.length) result.warnings.push('Keine Pfade automatisch erkannt. Regeln wurden als Freitext gespeichert.');
+  }
+  result.paths = [...new Set(result.paths)].slice(0, 500);
+  result.readWrite = result.readWrite.slice(0, 500);
+  return result;
+}
+
+export function saveServerDoc(key, doc) {
+  const db = readDb();
+  const safeKey = String(key || doc?.name || doc?.ip || `server-${Date.now()}`).trim();
+  if (!safeKey) throw new Error('Server-Schlüssel fehlt.');
+  db.serverDocs = db.serverDocs || {};
+  db.serverDocs[safeKey] = {
+    ...(db.serverDocs[safeKey] || {}),
+    key: safeKey,
+    name: String(doc?.name || '').trim(),
+    provider: String(doc?.provider || '').trim(),
+    ip: String(doc?.ip || '').trim(),
+    domain: String(doc?.domain || '').trim(),
+    sshUser: String(doc?.sshUser || '').trim(),
+    sshPort: String(doc?.sshPort || '').trim(),
+    os: String(doc?.os || '').trim(),
+    role: String(doc?.role || '').trim(),
+    notes: String(doc?.notes || '').trim(),
+    projectPaths: normalizeList(doc?.projectPaths),
+    services: normalizeList(doc?.services),
+    updatedAt: new Date().toISOString()
+  };
+  writeDb(db);
+  audit('server_doc_saved', { key: safeKey });
+}
+
+export function getServerDocs() {
+  const db = readDb();
+  return Object.values(db.serverDocs || {}).sort((a,b) => String(a.key).localeCompare(String(b.key)));
+}
+
+export function buildServerContext(inventory = null) {
+  const docs = getServerDocs();
+  const lines = ['# Server / VPS Kontext'];
+  if (inventory) {
+    lines.push(`Host: ${inventory.host || 'unbekannt'}`);
+    if (inventory.publicIp || inventory.ips?.length) lines.push(`IP: ${inventory.publicIp || inventory.ips.join(', ')}`);
+    lines.push(`Services: ${(inventory.services || []).map(s => `${s.unit}(${s.active})`).join(', ') || 'keine'}`);
+    lines.push(`Opt-Projekte: ${(inventory.optProjects || []).map(p => p.path).join(', ') || 'keine'}`);
+  }
+  for (const d of docs) {
+    lines.push(`\n## ${d.name || d.key}`);
+    lines.push(`Provider/IP: ${d.provider || '-'} / ${d.ip || '-'}`);
+    lines.push(`Domain: ${d.domain || '-'}`);
+    lines.push(`SSH: ${d.sshUser || 'root'}@${d.ip || '<ip>'}${d.sshPort ? ':' + d.sshPort : ''}`);
+    if (d.projectPaths?.length) lines.push(`Projektpfade: ${d.projectPaths.join(', ')}`);
+    if (d.services?.length) lines.push(`Services: ${d.services.join(', ')}`);
+    if (d.notes) lines.push(`Hinweise: ${d.notes}`);
+  }
+  return lines.join('\n');
+}
+
 export function saveFirebaseDoc(key, doc) {
   const db = readDb();
   const safeKey = String(key || doc?.projectId || doc?.databaseUrl || `firebase-${Date.now()}`).trim();
   if (!safeKey) throw new Error('Firebase-Schlüssel fehlt.');
   db.firebaseDocs = db.firebaseDocs || {};
-  db.firebaseDocs[safeKey] = { ...(db.firebaseDocs[safeKey] || {}), ...doc, key: safeKey, updatedAt: new Date().toISOString() };
+  const rulesText = String(doc?.rulesText ?? doc?.rules ?? db.firebaseDocs[safeKey]?.rulesText ?? '').trim();
+  const parsedRules = parseFirebaseRulesText(rulesText);
+  db.firebaseDocs[safeKey] = {
+    ...(db.firebaseDocs[safeKey] || {}),
+    key: safeKey,
+    label: String(doc?.label || '').trim(),
+    projectId: String(doc?.projectId || '').trim(),
+    databaseUrl: String(doc?.databaseUrl || '').trim(),
+    authDomain: String(doc?.authDomain || '').trim(),
+    storageBucket: String(doc?.storageBucket || '').trim(),
+    ownerAccount: String(doc?.ownerAccount || '').trim(),
+    firebaseUsers: normalizeList(doc?.firebaseUsers),
+    consoleUrl: String(doc?.consoleUrl || '').trim(),
+    notes: String(doc?.notes || '').trim(),
+    rulesText,
+    parsedRules,
+    updatedAt: new Date().toISOString()
+  };
   writeDb(db);
-  audit('firebase_doc_saved', { key: safeKey });
+  audit('firebase_doc_saved', { key: safeKey, paths: parsedRules.paths.length });
 }
 
 export function getFirebaseDocs() {
   const db = readDb();
   return Object.values(db.firebaseDocs || {}).sort((a,b) => String(a.key).localeCompare(String(b.key)));
+}
+
+export function getFirebaseRulesLibrary() {
+  const docs = getFirebaseDocs();
+  const rows = [];
+  for (const d of docs) {
+    for (const path of d.parsedRules?.paths || []) {
+      const matchingRules = (d.parsedRules?.readWrite || []).filter(r => r.path === path || String(r.path || '').startsWith(path));
+      rows.push({ key: d.key, label: d.label, projectId: d.projectId, databaseUrl: d.databaseUrl, path, rules: matchingRules });
+    }
+  }
+  return rows.sort((a,b) => String(a.key + a.path).localeCompare(String(b.key + b.path)));
+}
+
+export function buildFirebaseContext() {
+  const docs = getFirebaseDocs();
+  const aggregate = getFirebaseAggregate();
+  const lines = ['# Firebase Kontext'];
+  for (const d of docs) {
+    lines.push(`\n## ${d.label || d.key}`);
+    lines.push(`Projekt-ID: ${d.projectId || '-'}`);
+    lines.push(`Database URL: ${d.databaseUrl || '-'}`);
+    lines.push(`Firebase Account/User: ${d.ownerAccount || '-'}${d.firebaseUsers?.length ? ' / ' + d.firebaseUsers.join(', ') : ''}`);
+    lines.push(`Console: ${d.consoleUrl || '-'}`);
+    if (d.parsedRules?.paths?.length) lines.push(`Rules-Pfade: ${d.parsedRules.paths.join(', ')}`);
+    if (d.notes) lines.push(`Hinweise: ${d.notes}`);
+  }
+  if (aggregate.resources?.length) {
+    lines.push('\n## Aus Repository-Scans erkannte Firebase-Ressourcen');
+    for (const r of aggregate.resources.slice(0, 80)) lines.push(`- ${r.type}: ${r.value} (${(r.projects||[]).join(', ')})`);
+  }
+  return lines.join('\n');
 }
 
 export function getFirebaseAggregate() {

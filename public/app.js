@@ -12,6 +12,7 @@ const state = {
   aiEstimate: null,
   globalView: 'dashboard',
   serverInventory: null,
+  serverDocs: [],
   firebaseAggregate: null
 };
 
@@ -279,6 +280,8 @@ async function showServerInventory() {
     state.error = '';
     render();
     state.serverInventory = await api('/api/server/inventory');
+    const serverDocsData = await api('/api/server/docs');
+    state.serverDocs = serverDocsData.docs || [];
     state.message = 'Server-Inventar geladen.';
     render();
   } catch(e) { showError(e); }
@@ -299,18 +302,49 @@ async function showFirebaseInventory() {
 
 function renderServerInventory() {
   const inv = state.serverInventory;
+  const docs = state.serverDocs || [];
   if (!inv) return `<div class="card"><h1>Server & Bots</h1><p class="meta">Noch nicht geladen.</p><button onclick="showServerInventory()">Server scannen</button></div>`;
   const botServices = (inv.services || []).filter(s => /bot|watch|telegram|dashboard|hub|product|display|ofcs|jp/i.test(`${s.unit} ${s.description} ${s.execStart} ${s.workingDirectory}`));
   return `
-    <div class="card"><div class="row" style="justify-content:space-between"><div><h1>Server & Bots</h1><div class="meta">Host: ${escapeHtml(inv.host || '')} · Scan: ${escapeHtml(inv.scannedAt || '')}</div></div><button onclick="showServerInventory()">Neu scannen</button></div></div>
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h1>Server & Bots</h1><div class="meta">Host: ${escapeHtml(inv.host || '')} · OS: ${escapeHtml(inv.os || '')} · IP: ${escapeHtml(inv.publicIp || (inv.ips||[]).join(', '))} · Scan: ${escapeHtml(inv.scannedAt || '')}</div></div><button onclick="showServerInventory()">Neu scannen</button></div></div>
     <div class="grid">
+      <div class="card"><h2>Serverdaten</h2><div class="kv"><b>Host</b><span>${escapeHtml(inv.host||'')}</span></div><div class="kv"><b>IP(s)</b><span>${escapeHtml((inv.ips||[]).join(', ')||'')}</span></div><div class="kv"><b>OS</b><span>${escapeHtml(inv.os||'')}</span></div></div>
       <div class="card"><h2>Services</h2><div class="kv"><b>Systemd Services</b><span>${(inv.services||[]).length}</span></div><div class="kv"><b>relevant erkannt</b><span>${botServices.length}</span></div></div>
       <div class="card"><h2>/opt Projekte</h2><div class="kv"><b>Ordner</b><span>${(inv.optProjects||[]).length}</span></div></div>
-      <div class="card"><h2>Ports</h2>${(inv.listeners||[]).slice(0,12).map(x => `<div class="snippet">${escapeHtml(x)}</div>`).join('')}</div>
+    </div>
+    <div class="card"><h2>Manuelle Server-Doku</h2><p class="meta">Hier speicherst du IP, Anbieter, SSH, Services, Projektpfade und Hinweise dauerhaft. Diese Infos landen später im ChatGPT-Kontext.</p>
+      <div class="grid"><input id="serverKey" placeholder="Schlüssel, z. B. main-vps" value="main-vps"><input id="serverName" placeholder="Name" value="My VPS"><input id="serverProvider" placeholder="Anbieter" value="IONOS"><input id="serverIp" placeholder="IP" value="${escapeAttr(inv.publicIp || '')}"><input id="serverDomain" placeholder="Domain/Subdomain"><input id="serverSshUser" placeholder="SSH User" value="root"><input id="serverSshPort" placeholder="SSH Port" value="22"><input id="serverOs" placeholder="OS" value="${escapeAttr(inv.os || '')}"></div>
+      <textarea id="serverProjectPaths" placeholder="Projektpfade, einer pro Zeile">${escapeHtml((inv.optProjects||[]).map(p=>p.path).join('\n'))}</textarea>
+      <textarea id="serverServices" placeholder="Wichtige Services, einer pro Zeile">${escapeHtml(botServices.map(s=>s.unit).join('\n'))}</textarea>
+      <textarea id="serverNotes" placeholder="Hinweise, Startbefehle, Besonderheiten, was ChatGPT wissen muss"></textarea>
+      <button onclick="saveServerDoc()">Server-Doku speichern</button>
+      ${docs.map(d=>`<div class="fact"><strong>${escapeHtml(d.name || d.key)}</strong><div class="meta">${escapeHtml(d.provider||'')} · ${escapeHtml(d.ip||'')} · SSH ${escapeHtml(d.sshUser||'root')}@${escapeHtml(d.ip||'')}${d.sshPort?':'+escapeHtml(d.sshPort):''}</div><div>${escapeHtml(d.notes||'')}</div></div>`).join('')}
     </div>
     <div class="card"><h2>Erkannte Bots, Watcher und Dashboards</h2>${botServices.length ? `<table class="table"><tr><th>Service</th><th>Status</th><th>Autostart</th><th>Pfad</th><th>Start</th></tr>${botServices.map(s => `<tr><td>${escapeHtml(s.unit)}<div class="meta">${escapeHtml(s.description||'')}</div></td><td>${escapeHtml(s.active||'')}</td><td>${escapeHtml(s.enabled||'')}</td><td>${escapeHtml(s.workingDirectory||'')}</td><td><code>${escapeHtml(s.execStart||'')}</code></td></tr>`).join('')}</table>` : '<div class="meta">Keine relevanten Services erkannt.</div>'}</div>
-    <div class="card"><h2>Alle systemd Services</h2><table class="table"><tr><th>Service</th><th>Status</th><th>Pfad</th><th>Stack</th></tr>${(inv.services||[]).map(s => `<tr><td>${escapeHtml(s.unit)}</td><td>${escapeHtml(s.active||'')}</td><td>${escapeHtml(s.workingDirectory||'')}</td><td>${(s.stack||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('')}</td></tr>`).join('')}</table></div>
+    <div class="card"><h2>Laufende Ports</h2>${(inv.listeners||[]).map(x => `<div class="snippet">${escapeHtml(x)}</div>`).join('')}</div>
     <div class="card"><h2>Ordner unter /opt</h2><table class="table"><tr><th>Name</th><th>Pfad</th><th>Stack</th><th>Git Remote</th></tr>${(inv.optProjects||[]).map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.path)}</td><td>${(p.stack||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('')}</td><td>${escapeHtml(p.gitRemote||'')}</td></tr>`).join('')}</table></div>`;
+}
+
+async function saveServerDoc() {
+  try {
+    const body = {
+      key: document.getElementById('serverKey').value.trim(),
+      name: document.getElementById('serverName').value.trim(),
+      provider: document.getElementById('serverProvider').value.trim(),
+      ip: document.getElementById('serverIp').value.trim(),
+      domain: document.getElementById('serverDomain').value.trim(),
+      sshUser: document.getElementById('serverSshUser').value.trim(),
+      sshPort: document.getElementById('serverSshPort').value.trim(),
+      os: document.getElementById('serverOs').value.trim(),
+      projectPaths: document.getElementById('serverProjectPaths').value,
+      services: document.getElementById('serverServices').value,
+      notes: document.getElementById('serverNotes').value.trim()
+    };
+    const data = await api('/api/server/docs', { method:'POST', body:JSON.stringify(body) });
+    state.serverDocs = data.docs || [];
+    state.message = 'Server-Doku gespeichert.';
+    render();
+  } catch(e) { showError(e); }
 }
 
 function renderFirebaseInventory() {
@@ -318,26 +352,46 @@ function renderFirebaseInventory() {
   if (!fb) return `<div class="card"><h1>Firebase</h1><p class="meta">Noch nicht geladen.</p><button onclick="showFirebaseInventory()">Firebase-Übersicht laden</button></div>`;
   const resources = fb.resources || [];
   const docs = fb.docs || [];
+  const rules = [];
+  for (const d of docs) for (const p of (d.parsedRules?.paths || [])) rules.push({ doc:d, path:p, rw:(d.parsedRules?.readWrite||[]).filter(r=>r.path===p) });
   const byType = resources.reduce((m,r)=>{m[r.type]=(m[r.type]||0)+1; return m;},{});
   return `
-    <div class="card"><div class="row" style="justify-content:space-between"><div><h1>Firebase</h1><div class="meta">Aus allen gespeicherten Repo-Scans und manueller Doku aggregiert.</div></div><button onclick="showFirebaseInventory()">Neu laden</button></div></div>
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h1>Firebase</h1><div class="meta">Gespeicherte Firebase-Infos, Regeln und aus Repos erkannte Ressourcen.</div></div><button onclick="showFirebaseInventory()">Neu laden</button></div></div>
     <div class="grid">
-      <div class="card"><h2>Ressourcen</h2>${Object.entries(byType).map(([k,v]) => `<div class="kv"><b>${escapeHtml(k)}</b><span>${v}</span></div>`).join('') || '<div class="meta">Keine erkannt.</div>'}</div>
-      <div class="card"><h2>Dokumentierte Firebase-Projekte</h2><div class="kv"><b>Einträge</b><span>${docs.length}</span></div></div>
-      <div class="card"><h2>Wichtig</h2><p class="meta">Projekt-ID, Datenbank-URL und Regeln sind Ressourcen. Der Zweck eines Projekts wird nicht aus dem Firebase-Namen abgeleitet.</p></div>
+      <div class="card"><h2>Ressourcen aus Scans</h2>${Object.entries(byType).map(([k,v]) => `<div class="kv"><b>${escapeHtml(k)}</b><span>${v}</span></div>`).join('') || '<div class="meta">Keine erkannt.</div>'}</div>
+      <div class="card"><h2>Gespeicherte Firebase-Projekte</h2><div class="kv"><b>Einträge</b><span>${docs.length}</span></div><div class="kv"><b>organisierte Rules-Pfade</b><span>${rules.length}</span></div></div>
+      <div class="card"><h2>Wichtig</h2><p class="meta">Firebase-Projektname ist nur Ressource. Projektzweck kommt aus Code und KI-Analyse. Rules werden nach Pfaden sortiert und in den Kontext übernommen.</p></div>
     </div>
-    <div class="card"><h2>Erkannte Firebase-Ressourcen und Regeln</h2>${resources.length ? `<table class="table"><tr><th>Typ</th><th>Wert</th><th>Projekte</th><th>Belege</th></tr>${resources.map(r => `<tr><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.value)}</td><td>${escapeHtml((r.projects||[]).join(', '))}</td><td>${(r.evidence||[]).slice(0,4).map(e=>`<div class="snippet">${escapeHtml(e.repo||'')} ${escapeHtml(e.file||'')}${e.line?':'+e.line:''} ${escapeHtml(e.snippet||'')}</div>`).join('')}</td></tr>`).join('')}</table>` : '<div class="meta">Noch keine Firebase-Ressourcen erkannt. Scanne zuerst alle Repos.</div>'}</div>
-    <div class="card"><h2>Manuelle Firebase-Doku</h2><p class="meta">Hier kannst du Regeln, Hinweise und Schutzvorgaben pro Firebase-Projekt ergänzen. Das landet später im ChatGPT-Kontext.</p><div class="grid"><input id="fbKey" placeholder="Projekt-ID oder Datenbank-URL"><input id="fbLabel" placeholder="Name, z. B. gemeinsame Realtime DB"></div><textarea id="fbNotes" placeholder="Regeln, Datenstruktur, wichtige Hinweise..."></textarea><button onclick="saveFirebaseDoc()">Firebase-Doku speichern</button>${docs.map(d=>`<div class="fact"><strong>${escapeHtml(d.key)}</strong><div>${escapeHtml(d.label||'')}</div><div class="meta">${escapeHtml(d.notes||'')}</div></div>`).join('')}</div>`;
+    <div class="card"><h2>Firebase-Projekt speichern</h2>
+      <div class="grid"><input id="fbKey" placeholder="Schlüssel, z. B. queue-tracker-3fa3c"><input id="fbLabel" placeholder="Name, z. B. gemeinsame Realtime DB"><input id="fbProjectId" placeholder="Firebase Project ID"><input id="fbDatabaseUrl" placeholder="Realtime Database URL"><input id="fbAuthDomain" placeholder="Auth Domain"><input id="fbStorageBucket" placeholder="Storage Bucket"><input id="fbOwnerAccount" placeholder="Firebase Account / User"><input id="fbConsoleUrl" placeholder="Firebase Console URL"></div>
+      <textarea id="fbUsers" placeholder="Weitere Firebase User, einer pro Zeile"></textarea>
+      <textarea id="fbNotes" placeholder="Hinweise, Schutzregeln, geteilte Nutzung, was ChatGPT beachten muss"></textarea>
+      <textarea id="fbRulesText" placeholder="Firebase Rules JSON hier einfügen. Der Hub organisiert daraus automatisch die Pfade und .read/.write-Regeln." style="min-height:180px"></textarea>
+      <button onclick="saveFirebaseDoc()">Firebase-Doku und Rules speichern</button>
+    </div>
+    <div class="card"><h2>Gespeicherte Firebase-Projekte</h2>${docs.map(d=>`<div class="fact"><strong>${escapeHtml(d.label || d.key)}</strong><div class="meta">Projekt: ${escapeHtml(d.projectId||'-')} · DB: ${escapeHtml(d.databaseUrl||'-')} · Account: ${escapeHtml(d.ownerAccount||'-')}</div><div>${escapeHtml(d.notes||'')}</div><div class="meta">Rules-Pfade: ${escapeHtml((d.parsedRules?.paths||[]).join(', ') || 'keine')}</div></div>`).join('') || '<div class="meta">Noch keine manuelle Firebase-Doku gespeichert.</div>'}</div>
+    <div class="card"><h2>Organisierte Rules</h2>${rules.length ? `<table class="table"><tr><th>Projekt</th><th>Pfad</th><th>Regeln</th></tr>${rules.map(r=>`<tr><td>${escapeHtml(r.doc.label||r.doc.key)}</td><td><code>${escapeHtml(r.path)}</code></td><td>${(r.rw||[]).map(x=>`<div class="snippet">read: ${escapeHtml(x.read||'')} write: ${escapeHtml(x.write||'')} ${x.rule?escapeHtml(x.rule):''}</div>`).join('')}</td></tr>`).join('')}</table>` : '<div class="meta">Keine Rules gespeichert oder erkannt.</div>'}</div>
+    <div class="card"><h2>Erkannte Firebase-Ressourcen aus Repos</h2>${resources.length ? `<table class="table"><tr><th>Typ</th><th>Wert</th><th>Projekte</th><th>Belege</th></tr>${resources.map(r => `<tr><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.value)}</td><td>${escapeHtml((r.projects||[]).join(', '))}</td><td>${(r.evidence||[]).slice(0,4).map(e=>`<div class="snippet">${escapeHtml(e.repo||'')} ${escapeHtml(e.file||'')}${e.line?':'+e.line:''} ${escapeHtml(e.snippet||'')}</div>`).join('')}</td></tr>`).join('')}</table>` : '<div class="meta">Noch keine Firebase-Ressourcen erkannt. Scanne zuerst alle Repos.</div>'}</div>`;
 }
 
 async function saveFirebaseDoc() {
   try {
-    const key = document.getElementById('fbKey').value.trim();
-    const label = document.getElementById('fbLabel').value.trim();
-    const notes = document.getElementById('fbNotes').value.trim();
-    if (!key) throw new Error('Bitte Projekt-ID oder Datenbank-URL eintragen.');
-    await api('/api/firebase/docs', { method:'POST', body:JSON.stringify({ key, label, notes }) });
-    state.message = 'Firebase-Doku gespeichert.';
+    const body = {
+      key: document.getElementById('fbKey').value.trim(),
+      label: document.getElementById('fbLabel').value.trim(),
+      projectId: document.getElementById('fbProjectId').value.trim(),
+      databaseUrl: document.getElementById('fbDatabaseUrl').value.trim(),
+      authDomain: document.getElementById('fbAuthDomain').value.trim(),
+      storageBucket: document.getElementById('fbStorageBucket').value.trim(),
+      ownerAccount: document.getElementById('fbOwnerAccount').value.trim(),
+      consoleUrl: document.getElementById('fbConsoleUrl').value.trim(),
+      firebaseUsers: document.getElementById('fbUsers').value,
+      notes: document.getElementById('fbNotes').value.trim(),
+      rulesText: document.getElementById('fbRulesText').value
+    };
+    if (!body.key && !body.projectId && !body.databaseUrl) throw new Error('Bitte Schlüssel, Projekt-ID oder Datenbank-URL eintragen.');
+    state.firebaseAggregate = await api('/api/firebase/docs', { method:'POST', body:JSON.stringify(body) });
+    state.message = 'Firebase-Doku und Rules gespeichert.';
     await showFirebaseInventory();
   } catch(e) { showError(e); }
 }
@@ -600,4 +654,4 @@ if (state.session) {
   api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
 } else render();
 
-window.showServerInventory = showServerInventory; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
+window.showServerInventory = showServerInventory; window.saveServerDoc = saveServerDoc; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;

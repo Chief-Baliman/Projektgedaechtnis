@@ -79,11 +79,14 @@ async function listServices() {
 }
 
 export async function getServerInventory() {
-  const [services, optProjects, listenersRaw] = await Promise.all([
+  const [services, optProjects, listenersRaw, ipsRaw, osRaw] = await Promise.all([
     listServices(),
     listOptProjects(),
-    run('ss', ['-tulpn'])
+    run('ss', ['-tulpn']),
+    run('hostname', ['-I']),
+    run('lsb_release', ['-ds'])
   ]);
   const listeners = listenersRaw.split('\n').filter(l => /LISTEN/.test(l)).slice(0, 80);
-  return { scannedAt: new Date().toISOString(), host: await run('hostname', []), services, optProjects, listeners };
+  const ips = ipsRaw.split(/\s+/).filter(Boolean);
+  return { scannedAt: new Date().toISOString(), host: await run('hostname', []), os: osRaw.replace(/\"/g, ''), ips, publicIp: ips[0] || '', services, optProjects, listeners };
 }
