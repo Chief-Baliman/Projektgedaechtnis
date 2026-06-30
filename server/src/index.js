@@ -151,6 +151,15 @@ Rules erwähnt: ${f.rulesMentioned ? 'ja' : 'nein'}
 # Architektur
 ${(a.architecture || []).map(x => '- ' + x).join('\n') || '- keine Details'}
 
+# Code-Signatur und echte Scanner-Funde
+App-Domänen: ${(a.codeInsights?.domains || []).join(', ') || 'keine erkannt'}
+Code-Signatur: ${(a.codeInsights?.signature || []).join(', ') || 'keine erkannt'}
+Wichtige Funktionen: ${(a.codeInsights?.functions || []).slice(0, 40).join(', ') || 'keine erkannt'}
+UI-Texte/Buttons: ${(a.codeInsights?.uiLabels || []).slice(0, 40).join(', ') || 'keine erkannt'}
+Datei-Zusammenfassung:
+${(a.codeInsights?.fileSummaries || []).map(x => '- ' + x).join('\n') || '- keine erkannt'}
+Scan-Qualität: ${a.scanQuality?.quality || 'unbekannt'} mit ${a.scanQuality?.extractedSignals || 0} extrahierten Signalen aus ${a.scanQuality?.filesRead || 0} Dateien.
+
 # Erkannte Datenmodelle / Routen
 Datenmodelle: ${(a.dataModel || []).join(', ') || 'keine erkannt'}
 Routen/API-Pfade: ${(a.routes || []).join(', ') || 'keine erkannt'}
