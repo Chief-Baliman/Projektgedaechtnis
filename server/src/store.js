@@ -15,6 +15,7 @@ const initialDb = {
   rollbacks: {},
   notes: {},
   resources: {},
+  firebaseDocs: {},
   updatedAt: null
 };
 
@@ -214,6 +215,45 @@ export function saveRollback(fullName, rollback) {
 export function getRollback(fullName) {
   const db = readDb();
   return db.rollbacks[fullName] || null;
+}
+
+
+export function saveFirebaseDoc(key, doc) {
+  const db = readDb();
+  const safeKey = String(key || doc?.projectId || doc?.databaseUrl || `firebase-${Date.now()}`).trim();
+  if (!safeKey) throw new Error('Firebase-Schlüssel fehlt.');
+  db.firebaseDocs = db.firebaseDocs || {};
+  db.firebaseDocs[safeKey] = { ...(db.firebaseDocs[safeKey] || {}), ...doc, key: safeKey, updatedAt: new Date().toISOString() };
+  writeDb(db);
+  audit('firebase_doc_saved', { key: safeKey });
+}
+
+export function getFirebaseDocs() {
+  const db = readDb();
+  return Object.values(db.firebaseDocs || {}).sort((a,b) => String(a.key).localeCompare(String(b.key)));
+}
+
+export function getFirebaseAggregate() {
+  const db = readDb();
+  const map = new Map();
+  for (const [fullName, scan] of Object.entries(db.scans || {})) {
+    for (const res of scan.resources || []) {
+      if (!String(res.type || '').startsWith('firebase')) continue;
+      const key = `${res.type}:${res.value}`;
+      if (!map.has(key)) map.set(key, { type: res.type, value: res.value, label: res.label || res.type, projects: [], evidence: [] });
+      const item = map.get(key);
+      if (!item.projects.includes(fullName)) item.projects.push(fullName);
+    }
+    for (const fact of scan.facts || []) {
+      if (!/firebase|realtime|firestore|database|rules/i.test(`${fact.kind} ${fact.reason} ${fact.snippet}`)) continue;
+      const key = `fact:${fact.kind}:${fact.value || fact.snippet}`.slice(0, 180);
+      if (!map.has(key)) map.set(key, { type: 'firebase-fact', value: fact.value || fact.snippet, label: fact.kind || 'Fact', projects: [], evidence: [] });
+      const item = map.get(key);
+      if (!item.projects.includes(fullName)) item.projects.push(fullName);
+      item.evidence.push({ repo: fullName, file: fact.file, line: fact.line, snippet: fact.snippet });
+    }
+  }
+  return { resources: Array.from(map.values()).sort((a,b) => String(a.type+a.value).localeCompare(String(b.type+b.value))), docs: getFirebaseDocs() };
 }
 
 export function exportData() {

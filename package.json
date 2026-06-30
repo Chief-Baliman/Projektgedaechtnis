@@ -1,6 +1,6 @@
 {
   "name": "chief-developer-hub",
-  "version": "9.0.0",
+  "version": "10.0.0",
   "description": "Developer Hub mit GitHub-Scanner, Scanner Debug, Multi-Provider-KI-Codeanalyse, Kostenkontrolle, Analyse-Cache und GitHub Deployment.",
   "type": "module",
   "main": "server/src/index.js",

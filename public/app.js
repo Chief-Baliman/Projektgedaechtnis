@@ -9,7 +9,10 @@ const state = {
   settings: null,
   projects: [],
   resources: [],
-  aiEstimate: null
+  aiEstimate: null,
+  globalView: 'dashboard',
+  serverInventory: null,
+  firebaseAggregate: null
 };
 
 const GROUPS = {
@@ -208,6 +211,7 @@ function renderRepoList() {
 
 async function selectRepo(fullName) {
   state.selectedRepo = fullName;
+  state.globalView = 'project';
   state.scan = null;
   state.aiEstimate = null;
   state.tab = 'overview';
@@ -226,6 +230,8 @@ async function selectRepo(fullName) {
 function renderMain() {
   const el = document.getElementById('mainContent');
   if (!el) return;
+  if (state.globalView === 'server') { el.innerHTML = renderServerInventory(); return; }
+  if (state.globalView === 'firebase') { el.innerHTML = renderFirebaseInventory(); return; }
   if (!state.selectedRepo) {
     el.innerHTML = renderDashboard();
     return;
@@ -262,6 +268,78 @@ function renderDashboard() {
       <h2>Ressourcen-Graph</h2>
       ${state.resources.length ? `<table class="table"><tr><th>Typ</th><th>Wert</th><th>Projekte</th></tr>${state.resources.slice(0,80).map(r => `<tr><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.value)}</td><td>${escapeHtml((r.projects||[]).join(', '))}</td></tr>`).join('')}</table>` : '<div class="meta">Noch keine Ressourcen erkannt.</div>'}
     </div>`;
+}
+
+
+async function showServerInventory() {
+  try {
+    state.globalView = 'server';
+    state.selectedRepo = '';
+    state.message = 'Server-Inventar wird geladen...';
+    state.error = '';
+    render();
+    state.serverInventory = await api('/api/server/inventory');
+    state.message = 'Server-Inventar geladen.';
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function showFirebaseInventory() {
+  try {
+    state.globalView = 'firebase';
+    state.selectedRepo = '';
+    state.message = 'Firebase-Übersicht wird geladen...';
+    state.error = '';
+    render();
+    state.firebaseAggregate = await api('/api/firebase/aggregate');
+    state.message = 'Firebase-Übersicht geladen.';
+    render();
+  } catch(e) { showError(e); }
+}
+
+function renderServerInventory() {
+  const inv = state.serverInventory;
+  if (!inv) return `<div class="card"><h1>Server & Bots</h1><p class="meta">Noch nicht geladen.</p><button onclick="showServerInventory()">Server scannen</button></div>`;
+  const botServices = (inv.services || []).filter(s => /bot|watch|telegram|dashboard|hub|product|display|ofcs|jp/i.test(`${s.unit} ${s.description} ${s.execStart} ${s.workingDirectory}`));
+  return `
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h1>Server & Bots</h1><div class="meta">Host: ${escapeHtml(inv.host || '')} · Scan: ${escapeHtml(inv.scannedAt || '')}</div></div><button onclick="showServerInventory()">Neu scannen</button></div></div>
+    <div class="grid">
+      <div class="card"><h2>Services</h2><div class="kv"><b>Systemd Services</b><span>${(inv.services||[]).length}</span></div><div class="kv"><b>relevant erkannt</b><span>${botServices.length}</span></div></div>
+      <div class="card"><h2>/opt Projekte</h2><div class="kv"><b>Ordner</b><span>${(inv.optProjects||[]).length}</span></div></div>
+      <div class="card"><h2>Ports</h2>${(inv.listeners||[]).slice(0,12).map(x => `<div class="snippet">${escapeHtml(x)}</div>`).join('')}</div>
+    </div>
+    <div class="card"><h2>Erkannte Bots, Watcher und Dashboards</h2>${botServices.length ? `<table class="table"><tr><th>Service</th><th>Status</th><th>Autostart</th><th>Pfad</th><th>Start</th></tr>${botServices.map(s => `<tr><td>${escapeHtml(s.unit)}<div class="meta">${escapeHtml(s.description||'')}</div></td><td>${escapeHtml(s.active||'')}</td><td>${escapeHtml(s.enabled||'')}</td><td>${escapeHtml(s.workingDirectory||'')}</td><td><code>${escapeHtml(s.execStart||'')}</code></td></tr>`).join('')}</table>` : '<div class="meta">Keine relevanten Services erkannt.</div>'}</div>
+    <div class="card"><h2>Alle systemd Services</h2><table class="table"><tr><th>Service</th><th>Status</th><th>Pfad</th><th>Stack</th></tr>${(inv.services||[]).map(s => `<tr><td>${escapeHtml(s.unit)}</td><td>${escapeHtml(s.active||'')}</td><td>${escapeHtml(s.workingDirectory||'')}</td><td>${(s.stack||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('')}</td></tr>`).join('')}</table></div>
+    <div class="card"><h2>Ordner unter /opt</h2><table class="table"><tr><th>Name</th><th>Pfad</th><th>Stack</th><th>Git Remote</th></tr>${(inv.optProjects||[]).map(p => `<tr><td>${escapeHtml(p.name)}</td><td>${escapeHtml(p.path)}</td><td>${(p.stack||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('')}</td><td>${escapeHtml(p.gitRemote||'')}</td></tr>`).join('')}</table></div>`;
+}
+
+function renderFirebaseInventory() {
+  const fb = state.firebaseAggregate;
+  if (!fb) return `<div class="card"><h1>Firebase</h1><p class="meta">Noch nicht geladen.</p><button onclick="showFirebaseInventory()">Firebase-Übersicht laden</button></div>`;
+  const resources = fb.resources || [];
+  const docs = fb.docs || [];
+  const byType = resources.reduce((m,r)=>{m[r.type]=(m[r.type]||0)+1; return m;},{});
+  return `
+    <div class="card"><div class="row" style="justify-content:space-between"><div><h1>Firebase</h1><div class="meta">Aus allen gespeicherten Repo-Scans und manueller Doku aggregiert.</div></div><button onclick="showFirebaseInventory()">Neu laden</button></div></div>
+    <div class="grid">
+      <div class="card"><h2>Ressourcen</h2>${Object.entries(byType).map(([k,v]) => `<div class="kv"><b>${escapeHtml(k)}</b><span>${v}</span></div>`).join('') || '<div class="meta">Keine erkannt.</div>'}</div>
+      <div class="card"><h2>Dokumentierte Firebase-Projekte</h2><div class="kv"><b>Einträge</b><span>${docs.length}</span></div></div>
+      <div class="card"><h2>Wichtig</h2><p class="meta">Projekt-ID, Datenbank-URL und Regeln sind Ressourcen. Der Zweck eines Projekts wird nicht aus dem Firebase-Namen abgeleitet.</p></div>
+    </div>
+    <div class="card"><h2>Erkannte Firebase-Ressourcen und Regeln</h2>${resources.length ? `<table class="table"><tr><th>Typ</th><th>Wert</th><th>Projekte</th><th>Belege</th></tr>${resources.map(r => `<tr><td>${escapeHtml(r.type)}</td><td>${escapeHtml(r.value)}</td><td>${escapeHtml((r.projects||[]).join(', '))}</td><td>${(r.evidence||[]).slice(0,4).map(e=>`<div class="snippet">${escapeHtml(e.repo||'')} ${escapeHtml(e.file||'')}${e.line?':'+e.line:''} ${escapeHtml(e.snippet||'')}</div>`).join('')}</td></tr>`).join('')}</table>` : '<div class="meta">Noch keine Firebase-Ressourcen erkannt. Scanne zuerst alle Repos.</div>'}</div>
+    <div class="card"><h2>Manuelle Firebase-Doku</h2><p class="meta">Hier kannst du Regeln, Hinweise und Schutzvorgaben pro Firebase-Projekt ergänzen. Das landet später im ChatGPT-Kontext.</p><div class="grid"><input id="fbKey" placeholder="Projekt-ID oder Datenbank-URL"><input id="fbLabel" placeholder="Name, z. B. gemeinsame Realtime DB"></div><textarea id="fbNotes" placeholder="Regeln, Datenstruktur, wichtige Hinweise..."></textarea><button onclick="saveFirebaseDoc()">Firebase-Doku speichern</button>${docs.map(d=>`<div class="fact"><strong>${escapeHtml(d.key)}</strong><div>${escapeHtml(d.label||'')}</div><div class="meta">${escapeHtml(d.notes||'')}</div></div>`).join('')}</div>`;
+}
+
+async function saveFirebaseDoc() {
+  try {
+    const key = document.getElementById('fbKey').value.trim();
+    const label = document.getElementById('fbLabel').value.trim();
+    const notes = document.getElementById('fbNotes').value.trim();
+    if (!key) throw new Error('Bitte Projekt-ID oder Datenbank-URL eintragen.');
+    await api('/api/firebase/docs', { method:'POST', body:JSON.stringify({ key, label, notes }) });
+    state.message = 'Firebase-Doku gespeichert.';
+    await showFirebaseInventory();
+  } catch(e) { showError(e); }
 }
 
 function renderProject(scan) {
@@ -522,4 +600,4 @@ if (state.session) {
   api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
 } else render();
 
-window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
+window.showServerInventory = showServerInventory; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
