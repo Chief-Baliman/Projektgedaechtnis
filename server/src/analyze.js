@@ -1,7 +1,8 @@
 import crypto from 'crypto';
 
 const TEXT_EXT = /\.(html|js|ts|tsx|jsx|json|md|css|yml|yaml|env|txt|rules|cjs|mjs|py|service|toml|ini|conf|vue|svelte)$/i;
-const MAX_FILES = 700;
+const ANALYZER_VERSION = '4.0-code-facts';
+const MAX_FILES = 1200;
 const MAX_FILE_SIZE = 1200000;
 
 const uniq = arr => [...new Set((arr || []).filter(Boolean))];
@@ -69,6 +70,7 @@ export function analyzeRepository(repo, files, allKnownProjects = []) {
   ];
   const wiki = buildWiki({ repo, purpose, tech, firebase:{...firebase, sharedWith:sharedFirebase}, bots, projectSpace, ownershipNotes, importantFiles, architecture, secrets, sharedFirebase, dataModel, routes, todos, codeInsights, scanQuality, conflicts, sourceAudit });
   return {
+    analyzerVersion: ANALYZER_VERSION,
     repoName: repo.name, fullName: repo.fullName, purpose, defaultBranch: repo.defaultBranch, htmlUrl: repo.htmlUrl,
     pagesUrl: repo.hasPages ? `https://${repo.fullName.split('/')[0]}.github.io/${repo.name}/` : '', updatedAt: repo.updatedAt,
     fileCount: paths.length, scannedFiles: safeFiles.length, sourceAudit, tech, projectSpace, ownershipNotes,
@@ -126,7 +128,7 @@ function extractFacts(files) {
     { kind:'ui', label:'Heading', re:/<h[1-4][^>]*>([^<]{2,160})<\/h[1-4]>/gi },
     { kind:'api', label:'API Route', re:/\b(?:fetch|app\.(?:get|post|put|delete|patch))\s*\(\s*["'`]([^"'`]+)["'`]/g },
     { kind:'offer', label:'Angebot/Deal', re:/\b(angebot|angebote|angebots|offer|offers|deal|deals|preisvorschlag|ankauf|kaufangebot|verkaufsangebot|rabatt|discount)\b/gi },
-    { kind:'queue', label:'Queue', re:/\b(queue|warteschlange|bestellnummer|currentOrder|nextOrder|orderInput|remainingOrders|orderQueue)\b/gi },
+    { kind:'queue', label:'Queue', re:/\b(warteschlange|bestellnummer|currentOrder|nextOrder|orderInput|remainingOrders|orderQueue|queueTracker|showFullOverlay|insertAtTop|clearQueue)\b/gi },
     { kind:'quizt', label:'Quizt', re:/\b(quizt|quiz|punkte|punktestand|runde|round|team|teams|liga|league|moderator|eventcode)\b/gi },
     { kind:'product', label:'Produkt/Bestand', re:/\b(produkt|produkte|product|products|bestand|stock|barcode|preis|price|inventory|cardmarket|flohmarkt|artikel|sku)\b/gi },
     { kind:'bot', label:'Bot', re:/\b(telegram|bot|webhook|sendMessage|bot_token|discord)\b/gi },
@@ -204,22 +206,26 @@ function inferConflicts(repo, scores, facts, domains) {
   return out;
 }
 function inferPurpose(repo, domains, scores, facts, conflicts, scanQuality) {
-  if (scanQuality.confidence === 'niedrig') return 'Aus dem gelesenen Code noch nicht sicher erkennbar. Bitte Scanner-Debug prüfen.';
+  const codeFacts = facts.filter(f => f.source === 'code');
   const top = domains[0];
   const second = domains[1];
-  if (!top || top.score < 8) return 'Aus dem gelesenen Code nicht sicher genug erkannt.';
-  if (second && top.score - second.score < 5 && second.score >= 8) return `Gemischtes Projekt oder unklare Analyse. Stärkste Signale: ${top.key} und ${second.key}.`;
+  if (!codeFacts.length) return 'Nicht erkannt: Der Scanner hat keinen auswertbaren Quellcode gelesen.';
+  if (scanQuality.confidence === 'niedrig') return 'Aus dem gelesenen Code noch nicht sicher erkennbar. Scanner-Debug prüfen.';
+  if (!top || top.score < 10) return 'Aus dem gelesenen Code nicht sicher genug erkannt.';
+  if (second && top.score - second.score < 5 && second.score >= 10) return `Gemischtes Projekt oder unklare Analyse. Stärkste Code-Signale: ${top.key} und ${second.key}.`;
   const labels = {
-    'offer-tracking':'Angebots-, Deal- oder Preis-Tracker. Der Zweck wurde aus Angebots-/Deal-Signalen im Code abgeleitet.',
-    'queue-management':'Queue-/Warteschlangen-Tool. Der Zweck wurde aus Queue- und Bestellnummer-Signalen im Code abgeleitet.',
-    scoreboard:'Quizt-/Scoreboard-/Liga-Tool. Der Zweck wurde aus Punkte-, Runden-, Team- oder Liga-Signalen im Code abgeleitet.',
-    'market-tools':'Produkt-, Bestands- oder Marktverwaltungs-Tool. Der Zweck wurde aus Produkt-, Preis-, Bestand- oder Cardmarket-Signalen im Code abgeleitet.',
-    bot:'Bot- oder Messaging-Dienst. Der Zweck wurde aus Bot-, Telegram-, Webhook- oder Discord-Signalen im Code abgeleitet.',
-    watcher:'Watcher-, Scraper- oder Monitoring-Dienst. Der Zweck wurde aus Watcher-, Scraper-, Playwright- oder Notification-Signalen im Code abgeleitet.',
-    'developer-tool':'Developer-Hub oder internes Entwicklungstool. Der Zweck wurde aus GitHub-, Deploy-, Scanner- oder Secret-Signalen im Code abgeleitet.',
+    'offer-tracking':'Angebots-, Deal- oder Preis-Tracker. Belegt durch Angebots-/Deal-Signale im Quellcode.',
+    'queue-management':'Queue-/Warteschlangen-Tool. Belegt durch konkrete Queue-, Bestellnummer- oder queueTracker-Signale im Quellcode.',
+    scoreboard:'Quizt-/Scoreboard-/Liga-Tool. Belegt durch Punkte-, Runden-, Team- oder Liga-Signale im Quellcode.',
+    'market-tools':'Produkt-, Bestands- oder Marktverwaltungs-Tool. Belegt durch Produkt-, Preis-, Bestand- oder Cardmarket-Signale im Quellcode.',
+    bot:'Bot- oder Messaging-Dienst. Belegt durch Bot-, Telegram-, Webhook- oder Discord-Signale im Quellcode.',
+    watcher:'Watcher-, Scraper- oder Monitoring-Dienst. Belegt durch Watcher-, Scraper-, Playwright- oder Notification-Signale im Quellcode.',
+    'developer-tool':'Developer-Hub oder internes Entwicklungstool. Belegt durch GitHub-, Deploy-, Scanner- oder Secret-Signale im Quellcode.',
     website:'Statische Website oder Landingpage.'
   };
-  return labels[top.key] || `Stärkste erkannte Code-Domäne: ${top.key}.`;
+  const ev = evidenceFor(facts, top.key === 'queue-management' ? 'queue' : top.key === 'offer-tracking' ? 'offer' : top.key === 'scoreboard' ? 'quizt' : top.key === 'market-tools' ? 'product' : top.key === 'bot' ? 'bot' : top.key === 'watcher' ? 'watcher' : top.key === 'developer-tool' ? 'devhub' : 'ui', 1)[0];
+  const proof = ev ? ` Wichtigster Beleg: ${ev.file}:${ev.line} (${ev.match}).` : '';
+  return (labels[top.key] || `Stärkste erkannte Code-Domäne: ${top.key}.`) + proof;
 }
 function inferFirebase(facts) {
   const ids = uniq(facts.filter(f => f.kind === 'firebase-config' && /projectId/i.test(f.snippet)).map(f => f.match));
