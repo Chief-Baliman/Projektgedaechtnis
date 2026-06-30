@@ -19,3 +19,8 @@ npm install --no-audit --no-fund
 systemctl restart developer-hub
 systemctl status developer-hub --no-pager
 ```
+
+
+## v11.1
+
+- Server & Bots und Firebase sind jetzt direkt in der Sidebar erreichbar.

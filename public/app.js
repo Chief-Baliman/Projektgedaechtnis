@@ -55,6 +55,8 @@ function render() {
           <div class="stack">
             <button onclick="loadRepos()">Repositories laden</button>
             <button class="secondary" onclick="loadProjects()">Projektgraph laden</button>
+            <button class="secondary" onclick="showServerInventory()">Server & Bots</button>
+            <button class="secondary" onclick="showFirebaseInventory()">Firebase</button>
           </div>
         </div>
         <div class="card">
