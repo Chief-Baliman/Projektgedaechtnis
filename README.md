@@ -1,54 +1,56 @@
-# Projektgedächtnis
+# Chief Developer Hub / Projektgedächtnis
 
-Eine kleine Developer-Zentrale für ChatGPT-Projekte.
+Eine zentrale Web-App für deine ChatGPT-Entwicklungsprojekte.
 
-## Was Version 1.0 kann
+## Was diese Version kann
 
-- GitHub Token lokal speichern
-- Repositories über die GitHub API laden
-- Repository auswählen
-- Repository-Dateibaum scannen
-- wichtige Projektdateien lesen
-- Firebase, GitHub Pages, Bots, Server-Hinweise und Technik erkennen
-- Projektgedächtnis lokal im Browser speichern
-- ChatGPT-Kontext für neue Chats erzeugen
+- Login per Admin-Passwort
+- GitHub-Token zentral und verschlüsselt speichern
+- GitHub-Repositories laden
+- Repositories scannen
+- Firebase, GitHub Pages, wichtige Dateien, TODOs und Risiken erkennen
+- Projektgedächtnis pro Repository speichern
 - Abhängigkeiten über gemeinsame Firebase-Projekte erkennen
-- lokale Daten exportieren und importieren
-
-## Was noch nicht aktiv ist
-
-Die Bereiche ZIP-Deploy, Firebase-Verwaltung und VPS/Bots sind als Module in der Oberfläche vorbereitet, aber noch nicht vollständig umgesetzt.
-
-## GitHub Token
-
-Für Version 1 reicht ein Fine-grained GitHub Token mit Leserechten auf die gewünschten Repositories.
-
-Empfohlene Rechte:
-
-- Metadata: Read-only
-- Contents: Read-only
-
-Später für ZIP-Deploy nötig:
-
-- Contents: Read and write
-
-## Nutzung
-
-1. ZIP entpacken.
-2. Alle Dateien in ein neues GitHub Repository hochladen.
-3. GitHub Pages aktivieren.
-4. Seite öffnen.
-5. GitHub Token eintragen.
-6. Repositories laden.
-7. Projekt scannen.
-8. ChatGPT-Kontext erzeugen und kopieren.
-
-## Sicherheit
-
-Der Token wird nur lokal im Browser gespeichert. Diese Version nutzt keinen eigenen Server.
-
-Secrets wie Passwörter, API Keys oder private SSH Keys werden nicht in den erzeugten ChatGPT-Kontext übernommen. Das Tool warnt, wenn mögliche Secrets im Code erkannt werden.
+- ChatGPT-Kontext erzeugen
+- ZIP-Dateien in ein ausgewähltes Repository hochladen
+- Dateien aus ZIP überschreiben, aber nicht vorhandene Dateien bleiben erhalten
+- Letzten Commit vor Upload als Rollback-Punkt speichern
+- Letzten Upload per Button zurücksetzen
+- Secrets, VPS und Bots als Projektwissen speichern
+- Export und Import des Projektgedächtnisses
 
 ## Wichtig
 
-Wenn du dieses Tool online über GitHub Pages nutzt, ist die Anwendung öffentlich erreichbar. Deine lokalen Daten und dein Token liegen aber im Browser des jeweiligen Geräts. Nutze trotzdem keinen fremden Computer dafür.
+Diese App ist für deinen eigenen VPS gedacht. Nicht als öffentliche GitHub-Pages-Seite betreiben.
+
+## Schnellstart lokal
+
+1. Node.js installieren
+2. `.env.example` nach `server/.env` kopieren
+3. Werte eintragen
+4. Im Hauptordner ausführen:
+
+```bash
+npm run install:all
+npm run dev
+```
+
+Frontend:
+http://localhost:5173
+
+Backend:
+http://localhost:8787
+
+## Deployment auf VPS
+
+Siehe `docs/VPS_SETUP.md`.
+
+## GitHub Token
+
+Für die erste Version wird ein Fine-grained Personal Access Token genutzt.
+Benötigte Rechte:
+
+- Metadata: Read
+- Contents: Read and write
+
+OAuth-Struktur ist vorbereitet, aber für den schnellen produktiven Einsatz ist Token-Speicherung aktuell der stabilste Weg.
