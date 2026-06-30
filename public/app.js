@@ -8,7 +8,8 @@ const state = {
   error: '',
   settings: null,
   projects: [],
-  resources: []
+  resources: [],
+  aiEstimate: null
 };
 
 const GROUPS = {
@@ -208,11 +209,13 @@ function renderRepoList() {
 async function selectRepo(fullName) {
   state.selectedRepo = fullName;
   state.scan = null;
+  state.aiEstimate = null;
   state.tab = 'overview';
   render();
   try {
     const [owner, repo] = fullName.split('/');
     state.scan = await api(`/api/projects/${owner}/${repo}/scan`);
+    state.aiEstimate = null;
     render();
   } catch(e) {
     state.error = 'Noch kein Scan vorhanden. Bitte scannen.';
@@ -306,17 +309,40 @@ function renderOverview(scan) {
 
 function renderAi(scan) {
   const ai = scan.ai;
-  if (!ai) {
-    return `<div class="card">
+  const current = Boolean(ai?.contentFingerprint && scan.contentFingerprint && ai.contentFingerprint === scan.contentFingerprint);
+  const estimate = state.aiEstimate;
+  const estimateHtml = estimate ? `
+    <div class="card">
+      <h2>Kostenschätzung</h2>
+      <div class="kv"><b>Anbieter/Modell</b><span>${escapeHtml(estimate.providerLabel)} · ${escapeHtml(estimate.model)}</span></div>
+      <div class="kv"><b>Modus</b><span>${estimate.mode === 'changed' ? 'nur geänderte Dateien' : 'Vollanalyse'}</span></div>
+      <div class="kv"><b>Geschätzte Tokens</b><span>${escapeHtml(estimate.inputTokensEstimated)} input · ${escapeHtml(estimate.outputTokensEstimated)} output</span></div>
+      <div class="kv"><b>Geschätzte Kosten</b><span>${escapeHtml(estimate.estimatedCostLabel || 'nicht berechnet')}</span></div>
+      <div class="kv"><b>Dateien an KI</b><span>${escapeHtml(estimate.filesIncluded)} von ${escapeHtml(estimate.filesRead)} gelesenen Dateien</span></div>
+      ${estimate.mode === 'changed' ? `<div class="meta">Geändert: ${(estimate.changedFiles||[]).slice(0,8).map(escapeHtml).join(', ') || 'keine'}${(estimate.changedFiles||[]).length>8?' …':''}</div>` : ''}
+      <div class="meta">${escapeHtml(estimate.pricingNote || '')}</div>
+    </div>` : '';
+  const statusHtml = ai ? `<div class="card">
+      <h2>Speicherstatus</h2>
+      <p>${current ? '<span class="pill ok">Analyse ist aktuell</span>' : '<span class="pill warn">Code hat sich seit der KI-Analyse geändert oder Fingerprint fehlt</span>'}</p>
+      <div class="meta">Letzte KI-Analyse: ${escapeHtml(ai.analyzedAt || 'unbekannt')}</div>
+      <div class="meta">Kosten entstehen nur, wenn du eine neue KI-Analyse startest.</div>
+    </div>` : '';
+  const startCard = `<div class="card">
       <h2>KI-Codeanalyse</h2>
-      <p class="meta">Die normale Scanner-Engine liest das Repo und sammelt Fakten. Dieser Schritt schickt den gelesenen Code-Korpus serverseitig an den gespeicherten KI-Anbieter und lässt daraus eine echte Projektanalyse erzeugen.</p>
-      <p class="meta">Voraussetzung: KI-Anbieter und API Key links speichern. Gemini, Groq, OpenRouter, Mistral und OpenAI werden unterstützt.</p>
-      <button onclick="runAiAnalysis()">KI-Analyse starten</button>
+      <p class="meta">Die Analyse wird dauerhaft im Developer Hub gespeichert. Normales Öffnen, Lesen und Kontext-Kopieren kostet danach nichts.</p>
+      <div class="row">
+        <button onclick="estimateAiAnalysis('full')">Kosten schätzen</button>
+        <button onclick="runAiAnalysis('full')">Vollanalyse starten</button>
+        ${ai ? `<button class="secondary" onclick="estimateAiAnalysis('changed')">Delta schätzen</button><button class="secondary" onclick="runAiAnalysis('changed')">Nur geänderte Dateien analysieren</button>` : ''}
+      </div>
+      <div class="meta" style="margin-top:10px">Voraussetzung: KI-Anbieter und API Key links speichern.</div>
     </div>`;
-  }
-  return `<div class="grid">
+  if (!ai) return `${startCard}${estimateHtml}`;
+  return `${statusHtml}${startCard}${estimateHtml}
+  <div class="grid">
     <div class="card"><h2>KI-Zweck</h2><p>${escapeHtml(ai.purpose)}</p><div class="meta">Sicherheit: ${Math.round((ai.confidence || 0) * 100)} % · Anbieter: ${escapeHtml(ai.providerLabel || ai.provider || '')} · Modell: ${escapeHtml(ai.model || '')}</div></div>
-    <div class="card"><h2>Input</h2><div class="kv"><b>Dateien gelesen</b><span>${ai.inputStats?.filesRead || 0}</span></div><div class="kv"><b>KI-Korpus</b><span>${ai.inputStats?.corpusChars || 0} Zeichen</span></div><div class="kv"><b>Dateien an KI</b><span>${ai.inputStats?.includedFiles || 0}</span></div></div>
+    <div class="card"><h2>Input</h2><div class="kv"><b>Dateien gelesen</b><span>${ai.inputStats?.filesRead || 0}</span></div><div class="kv"><b>KI-Korpus</b><span>${ai.inputStats?.corpusChars || 0} Zeichen</span></div><div class="kv"><b>Dateien an KI</b><span>${ai.inputStats?.includedFiles || 0}</span></div><div class="kv"><b>Modus</b><span>${escapeHtml(ai.inputStats?.mode || 'full')}</span></div></div>
   </div>
   <div class="card"><h2>Zusammenfassung</h2><p>${escapeHtml(ai.summary || '')}</p></div>
   <div class="card"><h2>Hauptfunktionen</h2>${(ai.mainFeatures||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('') || '<div class="meta">Keine erkannt.</div>'}</div>
@@ -324,19 +350,44 @@ function renderAi(scan) {
   <div class="card"><h2>Firebase</h2><p>${escapeHtml(ai.firebase?.explanation || '')}</p><div class="meta">Feste Pfade: ${(ai.firebase?.fixedPaths||[]).map(escapeHtml).join(', ') || 'keine'}<br>Dynamische Pfade: ${(ai.firebase?.dynamicPaths||[]).map(escapeHtml).join(', ') || 'keine'}</div></div>
   <div class="card"><h2>Belege</h2>${(ai.evidence||[]).map(e => `<div class="fact"><strong>${escapeHtml(e.file)}:${escapeHtml(e.line)}</strong><div>${escapeHtml(e.finding)}</div><div class="snippet">${escapeHtml(e.snippet)}</div></div>`).join('')}</div>
   <div class="card"><h2>Regeln und Risiken</h2><h3>Risiken</h3>${(ai.risks||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('') || '<div class="meta">Keine.</div>'}<h3>Guardrails</h3>${(ai.guardrails||[]).map(x => `<div class="fact">${escapeHtml(x)}</div>`).join('')}</div>
-  <div class="card"><h2>Aktionen</h2><button onclick="runAiAnalysis()">KI-Analyse neu starten</button><button class="secondary" onclick="copyText(${JSON.stringify(ai.chatgptContext || '')})">KI-Kontext kopieren</button></div>`;
+  <div class="card"><h2>Aktionen</h2><button class="secondary" onclick="copyText(${JSON.stringify(ai.chatgptContext || '')})">KI-Kontext kopieren</button></div>`;
 }
 
-async function runAiAnalysis() {
+async function estimateAiAnalysis(mode = 'full') {
   try {
-    state.message = 'KI analysiert den gelesenen Code. Das kann je nach Repo 30 bis 90 Sekunden dauern...';
+    state.message = 'Kostenschätzung wird berechnet...';
     state.error = '';
     render();
     const [owner, repo] = state.selectedRepo.split('/');
-    const data = await api(`/api/projects/${owner}/${repo}/ai/analyze`, { method:'POST', body:JSON.stringify({ provider:state.settings?.aiProvider, model:getCurrentAiModel() }) });
-    state.scan = data.scan;
+    const params = new URLSearchParams({ provider: state.settings?.aiProvider || '', model: getCurrentAiModel() || '', mode });
+    state.aiEstimate = await api(`/api/projects/${owner}/${repo}/ai/estimate?${params.toString()}`);
     state.tab = 'ai';
-    state.message = 'KI-Analyse fertig.';
+    state.message = 'Kostenschätzung geladen.';
+    render();
+  } catch(e) { showError(e); }
+}
+
+async function runAiAnalysis(mode = 'full') {
+  try {
+    const [owner, repo] = state.selectedRepo.split('/');
+    const params = new URLSearchParams({ provider: state.settings?.aiProvider || '', model: getCurrentAiModel() || '', mode });
+    const estimate = await api(`/api/projects/${owner}/${repo}/ai/estimate?${params.toString()}`);
+    state.aiEstimate = estimate;
+    render();
+    if (estimate.current && mode === 'full') {
+      const ok = confirm('Die gespeicherte KI-Analyse ist laut Fingerprint bereits aktuell. Trotzdem neu analysieren?');
+      if (!ok) return;
+    }
+    const msg = `KI-Analyse starten?\n\nModus: ${estimate.mode}\nGeschätzte Kosten: ${estimate.estimatedCostLabel || 'nicht berechnet'}\nInput: ${estimate.inputTokensEstimated} Tokens\nOutput geschätzt: ${estimate.outputTokensEstimated} Tokens`;
+    if (!confirm(msg)) return;
+    state.message = 'KI analysiert den gelesenen Code. Große Repos können länger dauern...';
+    state.error = '';
+    render();
+    const data = await api(`/api/projects/${owner}/${repo}/ai/analyze`, { method:'POST', body:JSON.stringify({ provider:state.settings?.aiProvider, model:getCurrentAiModel(), mode }) });
+    state.scan = data.scan;
+    state.aiEstimate = null;
+    state.tab = 'ai';
+    state.message = data.ai?.reused ? 'KI-Analyse war bereits aktuell.' : 'KI-Analyse fertig und gespeichert.';
     await loadProjects(false);
     render();
   } catch(e) { showError(e); }
@@ -389,6 +440,7 @@ async function scanRepo() {
     state.message = 'Scan läuft. Das kann je nach Repo etwas dauern...'; state.error = ''; render();
     const [owner, repo] = state.selectedRepo.split('/');
     state.scan = await api(`/api/projects/${owner}/${repo}/scan`, { method:'POST' });
+    state.aiEstimate = null;
     state.message = 'Scan fertig.';
     await loadProjects(false);
     render();
@@ -399,6 +451,7 @@ async function loadScan() {
   try {
     const [owner, repo] = state.selectedRepo.split('/');
     state.scan = await api(`/api/projects/${owner}/${repo}/scan`);
+    state.aiEstimate = null;
     render();
   } catch(e) { showError(e); }
 }
@@ -469,4 +522,4 @@ if (state.session) {
   api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
 } else render();
 
-window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
+window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;

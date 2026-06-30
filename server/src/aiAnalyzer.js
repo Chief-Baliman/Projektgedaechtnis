@@ -45,6 +45,17 @@ const PROVIDERS = {
   }
 };
 
+const PRICE_USD_PER_1M = {
+  // Schätzwerte für Kosten-Vorschau. Tatsächliche Preise immer beim Anbieter prüfen.
+  openai: [
+    { match: /nano/i, input: 0.20, output: 1.25 },
+    { match: /mini/i, input: 0.75, output: 4.50 },
+    { match: /gpt-4\.1-mini/i, input: 0.40, output: 1.60 },
+    { match: /gpt-4o-mini/i, input: 0.15, output: 0.60 },
+    { match: /gpt-4|gpt-5/i, input: 2.50, output: 15.00 }
+  ]
+};
+
 export function getAiProviders() {
   return Object.fromEntries(Object.entries(PROVIDERS).map(([key, p]) => [key, {
     label: p.label,
@@ -99,20 +110,66 @@ const ANALYSIS_SCHEMA = {
   required: ['purpose','confidence','projectGroup','summary','architecture','mainFeatures','dataModel','externalServices','firebase','risks','guardrails','nextSteps','evidence','chatgptContext']
 };
 
+export async function estimateAiAnalysis(fullName, currentScan = null, options = {}) {
+  const settings = getAiSettings();
+  const providerKey = normalizeProvider(options.provider || settings.provider || DEFAULT_AI_PROVIDER);
+  const provider = PROVIDERS[providerKey];
+  const model = String(options.model || settings.models?.[providerKey] || DEFAULT_AI_MODEL || provider.defaultModel).trim() || provider.defaultModel;
+  const mode = normalizeMode(options.mode);
+  const loaded = await loadRepository(fullName);
+  const selected = selectContentsForMode(loaded, currentScan, mode);
+  const corpus = buildCorpus(loaded, selected.contents);
+  const staticFacts = buildStaticSummary(currentScan, loaded);
+  const prompt = buildPrompt(fullName, loaded, currentScan, corpus, staticFacts, { mode, previousAi: currentScan?.ai || null, changed: selected });
+  const inputChars = prompt.system.length + prompt.user.length;
+  const inputTokensEstimated = Math.ceil(inputChars / 3.8);
+  const outputTokensEstimated = Math.max(1800, Math.min(9000, Math.ceil(inputTokensEstimated * 0.08)));
+  const pricing = lookupPricing(providerKey, model);
+  const estimatedCostUsd = pricing ? ((inputTokensEstimated / 1_000_000) * pricing.input + (outputTokensEstimated / 1_000_000) * pricing.output) : null;
+  const current = Boolean(currentScan?.ai?.contentFingerprint && currentScan?.contentFingerprint && currentScan.ai.contentFingerprint === currentScan.contentFingerprint);
+  return {
+    provider: providerKey,
+    providerLabel: provider.label,
+    model,
+    mode,
+    current,
+    lastAnalyzedAt: currentScan?.ai?.analyzedAt || null,
+    contentFingerprint: currentScan?.contentFingerprint || null,
+    aiFingerprint: currentScan?.ai?.contentFingerprint || null,
+    filesTotal: loaded.inventory.totalFiles,
+    filesRead: loaded.inventory.readFiles,
+    filesIncluded: corpus.includedFiles.length,
+    changedFiles: selected.changedFiles,
+    deletedFiles: selected.deletedFiles,
+    corpusChars: corpus.totalChars,
+    truncated: corpus.truncated,
+    inputTokensEstimated,
+    outputTokensEstimated,
+    estimatedCostUsd,
+    estimatedCostLabel: estimatedCostUsd == null ? 'nicht berechnet' : `$${estimatedCostUsd.toFixed(4)}`,
+    pricingNote: pricing ? 'Schätzung anhand Token-Näherung. Tatsächliche API-Kosten können leicht abweichen.' : 'Für diesen Anbieter ist keine verlässliche Kostenschätzung hinterlegt.'
+  };
+}
+
 export async function runAiAnalysis(fullName, currentScan = null, options = {}) {
   const settings = getAiSettings();
   const providerKey = normalizeProvider(options.provider || settings.provider || DEFAULT_AI_PROVIDER);
   const provider = PROVIDERS[providerKey];
   const model = String(options.model || settings.models?.[providerKey] || DEFAULT_AI_MODEL || provider.defaultModel).trim() || provider.defaultModel;
+  const mode = normalizeMode(options.mode);
   const apiKey = getProviderKey(providerKey, provider);
   if (!apiKey) {
     throw new Error(`Kein API Key für ${provider.label} gespeichert. Bitte links im Bereich KI-Anbieter speichern.`);
   }
 
   const loaded = await loadRepository(fullName);
-  const corpus = buildCorpus(loaded);
+  const selected = selectContentsForMode(loaded, currentScan, mode);
+  if (mode === 'changed' && currentScan?.ai && selected.contents.length === 0) {
+    return { ...currentScan.ai, reused:true, reuseReason:'Keine geänderten Dateien seit der letzten KI-Analyse.' };
+  }
+  const corpus = buildCorpus(loaded, selected.contents);
   const staticFacts = buildStaticSummary(currentScan, loaded);
-  const prompt = buildPrompt(fullName, loaded, currentScan, corpus, staticFacts);
+  const prompt = buildPrompt(fullName, loaded, currentScan, corpus, staticFacts, { mode, previousAi: currentScan?.ai || null, changed: selected });
 
   const startedAt = new Date().toISOString();
   const raw = await callProvider({ providerKey, provider, model, apiKey, prompt });
@@ -126,7 +183,10 @@ export async function runAiAnalysis(fullName, currentScan = null, options = {}) 
     startedAt,
     fullName,
     loaded,
-    corpus
+    corpus,
+    mode,
+    selected,
+    contentFingerprint: currentScan?.contentFingerprint || null
   });
 
   if (currentScan) {
@@ -236,7 +296,7 @@ async function readProviderResponse(response, label) {
   return raw;
 }
 
-function buildPrompt(fullName, loaded, scan, corpus, staticFacts) {
+function buildPrompt(fullName, loaded, scan, corpus, staticFacts, options = {}) {
   const system = `Du bist ein erfahrener Senior-Softwarearchitekt und Code-Reviewer. Analysiere das Repository wirklich anhand des gelieferten Codes. Du darfst den Zweck nicht aus Repository-Name oder Firebase-Projekt-ID ableiten. Eine Firebase-Projekt-ID wie queue-tracker kann mehrere Tools enthalten. Nutze nur Code, UI-Texte, Datenpfade, Funktionen, Routen, Imports und Datei-Inhalte als Belege. Wenn etwas unsicher ist, schreibe das klar. Antworte ausschließlich mit einem einzigen gültigen JSON-Objekt. Keine Markdown-Ausgabe. Keine Erklärungen außerhalb des JSON. Das JSON muss diese Felder enthalten: purpose, confidence, projectGroup, summary, architecture, mainFeatures, dataModel, externalServices, firebase, risks, guardrails, nextSteps, evidence, chatgptContext.`;
   const user = `Repository: ${fullName}\n\nGitHub-Metadaten:\n${JSON.stringify(loaded.repo, null, 2)}\n\nStatische Voranalyse des Hubs:\n${JSON.stringify(staticFacts, null, 2)}\n\nWichtige Trennungsregel:\nQuizt ist ein externes Projekt für Laura und darf nicht als ChiefCards-Projekt einsortiert werden. ChiefCards, ChiefBaliman, Quizt/Laura und Infrastruktur getrennt halten.\n\nAufgabe:\n1. Bestimme den echten Projektzweck anhand des Codes.\n2. Erkenne Architektur, Hauptfunktionen, Datenmodell und externe Dienste.\n3. Erkläre Firebase-Nutzung. Projekt-ID ist nur Ressource, nicht Zweck.\n4. Nenne konkrete Belege mit Datei, Zeile und Snippet.\n5. Erstelle einen ChatGPT-Kontext, mit dem ein neuer Chat das Projekt weiterentwickeln kann.\n\nErforderliches JSON-Format:\n${JSON.stringify(buildJsonExample(), null, 2)}\n\nGelesener Code-Korpus (${corpus.totalChars} Zeichen, ${corpus.includedFiles.length} Dateien, gekürzt: ${corpus.truncated ? 'ja' : 'nein'}):\n\n${corpus.text}`;
   return { system, user };
@@ -279,9 +339,9 @@ function buildStaticSummary(scan, loaded) {
   };
 }
 
-function buildCorpus(loaded) {
+function buildCorpus(loaded, selectedContents = null) {
   const maxChars = MAX_AI_CORPUS_CHARS;
-  const files = loaded.contents.slice().sort((a,b) => importance(b) - importance(a));
+  const files = (selectedContents || loaded.contents).slice().sort((a,b) => importance(b) - importance(a));
   const parts = [];
   const includedFiles = [];
   let used = 0;
@@ -331,6 +391,42 @@ function maskSecrets(text) {
     .replace(/(xox[baprs]-[A-Za-z0-9-]{20,})/g, '[MASKED_SLACK_TOKEN]')
     .replace(/(bot[0-9]{6,}:[A-Za-z0-9_-]{20,})/gi, '[MASKED_TELEGRAM_TOKEN]')
     .replace(/(-----BEGIN [^-]+ PRIVATE KEY-----[\s\S]+?-----END [^-]+ PRIVATE KEY-----)/g, '[MASKED_PRIVATE_KEY]');
+}
+
+function normalizeMode(mode) {
+  return String(mode || 'full').toLowerCase() === 'changed' ? 'changed' : 'full';
+}
+
+function buildFileHashes(loaded) {
+  return Object.fromEntries((loaded.inventory?.files || []).filter(f => f.read && f.hash).map(f => [f.path, f.hash]));
+}
+
+function selectContentsForMode(loaded, currentScan, mode) {
+  const currentHashes = buildFileHashes(loaded);
+  const previousHashes = currentScan?.ai?.fileHashes || {};
+  if (mode !== 'changed' || !currentScan?.ai || !Object.keys(previousHashes).length) {
+    return { contents: loaded.contents, changedFiles: [], deletedFiles: [], fileHashes: currentHashes, mode:'full' };
+  }
+  const changedPaths = [];
+  for (const f of loaded.contents) {
+    if (previousHashes[f.path] !== f.hash) changedPaths.push(f.path);
+  }
+  const currentPathSet = new Set(Object.keys(currentHashes));
+  const deletedFiles = Object.keys(previousHashes).filter(p => !currentPathSet.has(p));
+  return {
+    contents: loaded.contents.filter(f => changedPaths.includes(f.path)),
+    changedFiles: changedPaths,
+    deletedFiles,
+    fileHashes: currentHashes,
+    mode:'changed'
+  };
+}
+
+function lookupPricing(providerKey, model) {
+  const rows = PRICE_USD_PER_1M[providerKey];
+  if (!rows) return null;
+  const m = String(model || '');
+  return rows.find(r => r.match.test(m)) || rows[rows.length - 1] || null;
 }
 
 function extractProviderText(providerKey, data) {
@@ -406,8 +502,13 @@ function normalizeAiResult(ai, meta) {
       filesRead: meta.loaded.inventory.readFiles,
       corpusChars: meta.corpus.totalChars,
       includedFiles: meta.corpus.includedFiles.length,
-      truncated: meta.corpus.truncated
-    }
+      truncated: meta.corpus.truncated,
+      mode: meta.mode || 'full',
+      changedFiles: meta.selected?.changedFiles || [],
+      deletedFiles: meta.selected?.deletedFiles || []
+    },
+    contentFingerprint: meta.contentFingerprint || null,
+    fileHashes: meta.selected?.fileHashes || buildFileHashes(meta.loaded)
   };
 }
 

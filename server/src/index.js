@@ -8,7 +8,7 @@ import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { PORT, APP_ORIGIN, ADMIN_PASSWORD } from './config.js';
 import { audit, exportData, getAllProjects, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, listSecrets, revealSecret, saveAiSettings, saveGithubToken, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
-import { getAiProviders, runAiAnalysis } from './aiAnalyzer.js';
+import { estimateAiAnalysis, getAiProviders, runAiAnalysis } from './aiAnalyzer.js';
 import { listRepos, getBranchHead, putFile, resetBranch } from './github.js';
 import { scanRepository, SCANNER_VERSION } from './scanner/index.js';
 
@@ -78,12 +78,26 @@ app.post('/api/projects/:owner/:repo/scan', requireAuth, async (req,res) => {
 });
 
 
+
+app.get('/api/projects/:owner/:repo/ai/estimate', requireAuth, async (req,res) => {
+  try {
+    const fullName = `${req.params.owner}/${req.params.repo}`;
+    const scan = getScan(fullName);
+    if (!scan) return res.status(400).json({ error:'Bitte zuerst einen normalen Repository-Scan ausführen.' });
+    const estimate = await estimateAiAnalysis(fullName, scan, { provider:req.query?.provider, model:req.query?.model, mode:req.query?.mode });
+    res.json(estimate);
+  } catch(e) {
+    console.error(e);
+    res.status(500).json({ error:e.message });
+  }
+});
+
 app.post('/api/projects/:owner/:repo/ai/analyze', requireAuth, async (req,res) => {
   try {
     const fullName = `${req.params.owner}/${req.params.repo}`;
     const scan = getScan(fullName);
     if (!scan) return res.status(400).json({ error:'Bitte zuerst einen normalen Repository-Scan ausführen.' });
-    const ai = await runAiAnalysis(fullName, scan, { provider:req.body?.provider, model:req.body?.model });
+    const ai = await runAiAnalysis(fullName, scan, { provider:req.body?.provider, model:req.body?.model, mode:req.body?.mode });
     res.json({ ok:true, ai, scan:getScan(fullName) });
   } catch(e) {
     console.error(e);

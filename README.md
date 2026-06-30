@@ -1,30 +1,34 @@
-# Chief Developer Hub v8
+# Chief Developer Hub v9.0
 
-Developer Hub mit GitHub-Scanner, Scanner Debug, Code-Fakten, ZIP-Deploy, Rollback und Multi-Provider-KI-Codeanalyse.
+Developer Hub mit GitHub-Scanner, Scanner Debug, Multi-KI-Codeanalyse, Kostenkontrolle, Analyse-Cache, Delta-Analyse und GitHub-Deployment.
 
-## Neu in v8
+## Neu in v9.0
 
-- KI-Anbieter auswählbar: Google Gemini, Groq, OpenRouter, Mistral, OpenAI
-- API Keys werden serverseitig verschlüsselt gespeichert
-- Anbieter und Modell werden im Hub gespeichert
-- KI-Analyse nutzt weiter den gelesenen Code-Korpus und die Scanner-Fakten
-- OpenAI bleibt möglich, ist aber nicht mehr Pflicht
+- Kostenschätzung vor KI-Analyse
+- gespeicherte KI-Analyse wird weiterverwendet, solange der Code-Fingerprint gleich bleibt
+- Analyse-Fingerprint und Datei-Hashes werden gespeichert
+- Delta-Modus für neue oder geänderte Dateien
+- Warnung, wenn eine Analyse bereits aktuell ist
+- OpenAI/Gemini/Groq/OpenRouter/Mistral weiter auswählbar
 
-## Update
-
-1. Inhalt dieser ZIP ins GitHub-Repository hochladen.
-2. Auf dem VPS:
+## Update auf VPS
 
 ```bash
 cd /opt/projects/developer-hub
 git fetch --all
 git reset --hard origin/main
-npm install
-pkill -f "node server/src/index.js" || true
-npm start
+npm install --no-audit --no-fund
+systemctl restart developer-hub
+systemctl status developer-hub --no-pager
 ```
 
-3. Browser hart neu laden.
-4. KI-Anbieter links wählen, Modell prüfen, Key speichern.
-5. Repo scannen.
-6. Tab KI-Analyse öffnen und Analyse starten.
+Danach im Browser hart neu laden.
+
+## Nutzung
+
+1. Repo normal scannen.
+2. Tab KI-Analyse öffnen.
+3. Kosten schätzen klicken.
+4. Bei Bedarf Vollanalyse oder Delta-Analyse starten.
+
+Normales Öffnen, Wiki lesen, Kontext kopieren und gespeicherte Analyse ansehen erzeugt keine API-Kosten.
