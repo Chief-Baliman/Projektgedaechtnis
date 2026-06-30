@@ -2,14 +2,20 @@
   "name": "chief-developer-hub",
   "version": "1.0.0",
   "private": true,
-  "description": "Developer Hub / Projektgedaechtnis fuer GitHub, Projekte, Secrets, Kontext und Deployments.",
+  "type": "module",
   "scripts": {
-    "install:all": "npm install && npm install --prefix server && npm install --prefix client",
-    "dev": "concurrently \"npm run dev --prefix server\" \"npm run dev --prefix client\"",
-    "build": "npm run build --prefix client",
-    "start": "npm run start --prefix server"
+    "start": "node server/src/index.js",
+    "dev": "NODE_ENV=development node server/src/index.js"
   },
-  "devDependencies": {
-    "concurrently": "^8.2.2"
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "nanoid": "^5.1.6"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
