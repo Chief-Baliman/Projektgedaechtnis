@@ -648,6 +648,128 @@ async function loadSecrets() {
   } catch(e) { showError(e); }
 }
 
+
+
+function inferServiceKind(service) {
+  const hay = `${service?.unit || ''} ${service?.description || ''} ${service?.execStart || ''} ${service?.workingDirectory || ''}`.toLowerCase();
+  if (/telegram|telegraf|bot/.test(hay)) return 'Bot';
+  if (/watch|watcher|crawler|scrap|product|ofcs|playwright/.test(hay)) return 'Watcher';
+  if (/dashboard|display|gunicorn|flask|fastapi|express|hub/.test(hay)) return 'Dashboard / Web-App';
+  if (/nginx|proxy/.test(hay)) return 'Reverse Proxy';
+  if (/firebase|sync/.test(hay)) return 'Firebase-Dienst';
+  return 'Server-Service';
+}
+
+function renderCommandBlock(text) {
+  const value = String(text || '').trim();
+  return `<pre class="command-block"><code>${escapeHtml(value || 'Keine Befehle vorhanden.')}</code></pre>`;
+}
+
+function copyButton(label, text) {
+  const encoded = encodeURIComponent(String(text || ''));
+  return `<button class="secondary" onclick="copyText(decodeURIComponent('${encoded}'))">${escapeHtml(label)}</button>`;
+}
+
+function buildServiceCommands(service) {
+  const unit = service?.unit || '';
+  const dir = service?.workingDirectory || '';
+  const lines = [];
+  if (dir) lines.push(`cd ${dir}`);
+  if (unit) {
+    lines.push(`systemctl status ${unit} --no-pager`);
+    lines.push(`journalctl -u ${unit} -n 120 --no-pager`);
+    lines.push(`# Nach Änderungen neu starten:`);
+    lines.push(`systemctl restart ${unit}`);
+    lines.push(`systemctl status ${unit} --no-pager`);
+  }
+  return lines.join('\n') || 'Kein Service-Befehl erkannt.';
+}
+
+function buildProjectCommands(project) {
+  const dir = project?.path || '';
+  const lines = [];
+  if (dir) lines.push(`cd ${dir}`);
+  if (project?.gitRemote) {
+    lines.push('git status');
+    lines.push('git pull');
+  }
+  if ((project?.stack || []).includes('Node.js')) {
+    lines.push('npm install --no-audit --no-fund');
+  }
+  if ((project?.stack || []).includes('Python')) {
+    lines.push('source venv/bin/activate 2>/dev/null || true');
+    lines.push('pip install -r requirements.txt 2>/dev/null || true');
+  }
+  lines.push('# Zugehörigen systemd-Service danach neu starten, falls vorhanden.');
+  return lines.join('\n') || 'Kein Projekt-Befehl erkannt.';
+}
+
+function buildServiceContext(service, inventory, docs) {
+  const doc = (docs || [])[0] || {};
+  return `Ich möchte an einem Server-Service weiterarbeiten.
+
+Server:
+- Host: ${inventory?.host || 'unbekannt'}
+- IP: ${doc.ip || inventory?.publicIp || (inventory?.ips || []).join(', ') || 'unbekannt'}
+- Anbieter: ${doc.provider || 'unbekannt'}
+- SSH: ${doc.sshUser || 'root'}@${doc.ip || inventory?.publicIp || 'SERVER_IP'}${doc.sshPort ? ':' + doc.sshPort : ''}
+- OS: ${doc.os || inventory?.os || 'unbekannt'}
+
+Service:
+- Unit: ${service?.unit || 'unbekannt'}
+- Art: ${inferServiceKind(service)}
+- Beschreibung: ${service?.description || ''}
+- Status: ${service?.active || ''}
+- Autostart: ${service?.enabled || ''}
+- Arbeitsordner: ${service?.workingDirectory || 'nicht erkannt'}
+- Startbefehl: ${service?.execStart || 'nicht erkannt'}
+- Stack: ${(service?.stack || []).join(', ') || 'nicht erkannt'}
+
+Letzte Logs:
+${(service?.logs || []).join('\n') || 'Keine Logs geladen.'}
+
+Wichtige Regeln:
+- Bestehende Services auf dem VPS nicht beschädigen.
+- Vor Änderungen den Arbeitsordner und systemd-Service prüfen.
+- Keine Secrets, Tokens oder .env-Inhalte in Antworten ausschreiben.
+- Nach Änderungen den passenden Service neu starten und Status/Logs prüfen.
+
+Hilfreiche Befehle:
+${buildServiceCommands(service)}
+`;
+}
+
+function buildProjectContext(project, inventory, docs, relatedServices = []) {
+  const doc = (docs || [])[0] || {};
+  return `Ich möchte an einem Server-Projekt weiterarbeiten.
+
+Server:
+- Host: ${inventory?.host || 'unbekannt'}
+- IP: ${doc.ip || inventory?.publicIp || (inventory?.ips || []).join(', ') || 'unbekannt'}
+- Anbieter: ${doc.provider || 'unbekannt'}
+- SSH: ${doc.sshUser || 'root'}@${doc.ip || inventory?.publicIp || 'SERVER_IP'}${doc.sshPort ? ':' + doc.sshPort : ''}
+- OS: ${doc.os || inventory?.os || 'unbekannt'}
+
+Projekt:
+- Name: ${project?.name || 'unbekannt'}
+- Pfad: ${project?.path || 'unbekannt'}
+- Stack: ${(project?.stack || []).join(', ') || 'nicht erkannt'}
+- Git Remote: ${project?.gitRemote || 'nicht erkannt'}
+
+Zugehörige systemd-Services:
+${relatedServices.length ? relatedServices.map(s => `- ${s.unit}: ${s.description || ''} (${s.active || ''})`).join('\n') : '- keine erkannt'}
+
+Wichtige Regeln:
+- Projektpfad und zugehörige Services prüfen, bevor Änderungen gemacht werden.
+- Keine anderen /opt-Projekte verändern.
+- Keine Secrets, Tokens oder .env-Inhalte in Antworten ausschreiben.
+- Nach Änderungen passende Services neu starten und Logs prüfen.
+
+Hilfreiche Befehle:
+${buildProjectCommands(project)}
+`;
+}
+
 async function copyText(text) { await navigator.clipboard.writeText(text || ''); alert('Kopiert.'); }
 function showError(e) { state.error = e.message; state.message = ''; render(); }
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }

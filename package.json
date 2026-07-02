@@ -1,6 +1,6 @@
 {
   "name": "chief-developer-hub",
-  "version": "12.0.0",
+  "version": "12.1.0",
   "description": "Developer Hub mit Server-Projekt-Workflow, Bot-Kontext und Firebase-Infrastruktur.",
   "type": "module",
   "main": "server/src/index.js",
