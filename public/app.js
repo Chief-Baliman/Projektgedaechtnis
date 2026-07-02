@@ -28,6 +28,8 @@ const GROUPS = {
 };
 
 const app = document.getElementById('app');
+let copyStore = {};
+let copySeq = 0;
 
 async function api(path, options = {}) {
   const res = await fetch(path, {
@@ -46,6 +48,8 @@ async function api(path, options = {}) {
 }
 
 function render() {
+  copyStore = {};
+  copySeq = 0;
   if (!state.session) return renderLogin();
   app.innerHTML = `
     <div class="shell">
@@ -716,8 +720,9 @@ function renderCommandBlock(text) {
 }
 
 function copyButton(label, text) {
-  const encoded = encodeURIComponent(String(text || ''));
-  return `<button class="secondary" onclick="copyText(decodeURIComponent('${encoded}'))">${escapeHtml(label)}</button>`;
+  const id = `copy_${++copySeq}`;
+  copyStore[id] = String(text || '');
+  return `<button class="secondary" onclick="copyStored('${id}')">${escapeHtml(label)}</button>`;
 }
 
 function buildServiceCommands(service) {
@@ -826,7 +831,58 @@ ${buildProjectCommands(project)}
 `;
 }
 
-async function copyText(text) { await navigator.clipboard.writeText(text || ''); alert('Kopiert.'); }
+async function copyStored(id) {
+  return copyText(copyStore[id] || '');
+}
+
+async function copyText(text) {
+  const value = String(text || '').trim();
+  if (!value) {
+    alert('Kein Kontext vorhanden. Falls es um einen Server-Bot geht: erst Server & Bots neu scannen und bei diesem Service die Server-KI-Analyse ausführen.');
+    return;
+  }
+
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      alert('Kopiert.');
+      return;
+    }
+  } catch (err) {
+    console.warn('Clipboard API fehlgeschlagen, nutze Fallback:', err);
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = value;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  textarea.style.top = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  try {
+    const ok = document.execCommand('copy');
+    document.body.removeChild(textarea);
+    if (ok) {
+      alert('Kopiert.');
+      return;
+    }
+  } catch (err) {
+    console.warn('execCommand copy fehlgeschlagen:', err);
+    document.body.removeChild(textarea);
+  }
+
+  const popup = window.open('', '_blank');
+  if (popup) {
+    popup.document.write(`<pre style="white-space:pre-wrap;font-family:system-ui,monospace;padding:20px">${escapeHtml(value)}</pre>`);
+    popup.document.close();
+    alert('Automatisches Kopieren wurde vom Browser blockiert. Der Kontext wurde in einem neuen Tab geöffnet. Dort kannst du ihn manuell kopieren.');
+  } else {
+    prompt('Automatisches Kopieren wurde blockiert. Kontext hier manuell kopieren:', value);
+  }
+}
 function showError(e) { state.error = e.message; state.message = ''; render(); }
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 function escapeAttr(s) { return escapeHtml(s).replace(/'/g, '&#39;'); }
@@ -835,4 +891,4 @@ if (state.session) {
   api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
 } else render();
 
-window.showServerInventory = showServerInventory; window.estimateServerAi = estimateServerAi; window.runServerAi = runServerAi; window.saveServerDoc = saveServerDoc; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
+window.copyStored = copyStored; window.showServerInventory = showServerInventory; window.estimateServerAi = estimateServerAi; window.runServerAi = runServerAi; window.saveServerDoc = saveServerDoc; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
