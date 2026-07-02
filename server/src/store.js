@@ -17,6 +17,7 @@ const initialDb = {
   resources: {},
   firebaseDocs: {},
   serverDocs: {},
+  serverAiAnalyses: {},
   updatedAt: null
 };
 
@@ -300,6 +301,40 @@ export function getServerDocs() {
   return Object.values(db.serverDocs || {}).sort((a,b) => String(a.key).localeCompare(String(b.key)));
 }
 
+
+export function serverAnalysisKey({ path: projectPath, unit } = {}) {
+  const raw = `${unit || ''}|${projectPath || ''}`;
+  return hashText(raw || `server-${Date.now()}`).slice(0, 24);
+}
+
+export function saveServerAiAnalysis(target = {}, analysis = {}) {
+  const db = readDb();
+  db.serverAiAnalyses = db.serverAiAnalyses || {};
+  const key = target.key || serverAnalysisKey(target);
+  db.serverAiAnalyses[key] = {
+    key,
+    unit: target.unit || '',
+    path: target.path || '',
+    name: target.name || target.unit || target.path || key,
+    analysis,
+    updatedAt: new Date().toISOString()
+  };
+  writeDb(db);
+  audit('server_ai_analysis_saved', { key, unit: target.unit || '', path: target.path || '' });
+  return db.serverAiAnalyses[key];
+}
+
+export function getServerAiAnalyses() {
+  const db = readDb();
+  return Object.values(db.serverAiAnalyses || {}).sort((a,b) => String(a.name || a.key).localeCompare(String(b.name || b.key)));
+}
+
+export function getServerAiAnalysis(target = {}) {
+  const db = readDb();
+  const key = target.key || serverAnalysisKey(target);
+  return db.serverAiAnalyses?.[key] || null;
+}
+
 export function buildServerContext(inventory = null) {
   const docs = getServerDocs();
   const lines = ['# Server / VPS Kontext'];
@@ -309,6 +344,7 @@ export function buildServerContext(inventory = null) {
     lines.push(`Services: ${(inventory.services || []).map(s => `${s.unit}(${s.active})`).join(', ') || 'keine'}`);
     lines.push(`Opt-Projekte: ${(inventory.optProjects || []).map(p => p.path).join(', ') || 'keine'}`);
   }
+  const aiAnalyses = getServerAiAnalyses();
   for (const d of docs) {
     lines.push(`\n## ${d.name || d.key}`);
     lines.push(`Provider/IP: ${d.provider || '-'} / ${d.ip || '-'}`);
@@ -317,6 +353,19 @@ export function buildServerContext(inventory = null) {
     if (d.projectPaths?.length) lines.push(`Projektpfade: ${d.projectPaths.join(', ')}`);
     if (d.services?.length) lines.push(`Services: ${d.services.join(', ')}`);
     if (d.notes) lines.push(`Hinweise: ${d.notes}`);
+  }
+  if (aiAnalyses.length) {
+    lines.push('\n## KI-Analysen Server-Projekte');
+    for (const row of aiAnalyses) {
+      const a = row.analysis || {};
+      lines.push(`\n### ${row.name || row.unit || row.path}`);
+      lines.push(`Pfad: ${row.path || '-'}`);
+      lines.push(`Service: ${row.unit || '-'}`);
+      if (a.purpose) lines.push(`Zweck: ${a.purpose}`);
+      if (a.summary) lines.push(`Zusammenfassung: ${a.summary}`);
+      if (a.runbook?.length) lines.push(`Runbook: ${a.runbook.join(' | ')}`);
+      if (a.guardrails?.length) lines.push(`Guardrails: ${a.guardrails.join(' | ')}`);
+    }
   }
   return lines.join('\n');
 }

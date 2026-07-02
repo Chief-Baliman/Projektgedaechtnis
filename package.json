@@ -1,7 +1,7 @@
 {
   "name": "chief-developer-hub",
-  "version": "12.1.0",
-  "description": "Developer Hub mit Server-Projekt-Workflow, Bot-Kontext und Firebase-Infrastruktur.",
+  "version": "13.0.0",
+  "description": "Developer Hub mit Repository-KI, Server/Bot-KI-Analyse und Firebase-Infrastruktur.",
   "type": "module",
   "main": "server/src/index.js",
   "scripts": {

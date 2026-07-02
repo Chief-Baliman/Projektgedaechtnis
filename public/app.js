@@ -13,6 +13,8 @@ const state = {
   globalView: 'dashboard',
   serverInventory: null,
   serverDocs: [],
+  serverAiAnalyses: [],
+  serverAiEstimate: null,
   firebaseAggregate: null
 };
 
@@ -283,7 +285,9 @@ async function showServerInventory() {
     render();
     state.serverInventory = await api('/api/server/inventory');
     const serverDocsData = await api('/api/server/docs');
+    const serverAiData = await api('/api/server/ai');
     state.serverDocs = serverDocsData.docs || [];
+    state.serverAiAnalyses = serverAiData.analyses || [];
     state.message = 'Server-Inventar geladen.';
     render();
   } catch(e) { showError(e); }
@@ -300,6 +304,22 @@ async function showFirebaseInventory() {
     state.message = 'Firebase-Übersicht geladen.';
     render();
   } catch(e) { showError(e); }
+}
+
+
+function findServerAiFor({ path, unit }) {
+  return (state.serverAiAnalyses || []).find(a => (unit && a.unit === unit) || (path && a.path === path)) || null;
+}
+
+function renderServerAiSummary(row) {
+  if (!row?.analysis) return '<span class="pill warn">Noch keine KI-Analyse</span>';
+  const ai = row.analysis;
+  return `<span class="pill ok">KI: ${escapeHtml(ai.kind || ai.model || 'analysiert')}</span><div class="meta">${escapeHtml(ai.purpose || '')}</div>`;
+}
+
+function serverAiButtons({ path, unit, label }) {
+  const target = encodeURIComponent(JSON.stringify({ path:path || '', unit:unit || '', label:label || '' }));
+  return `<button class="secondary" onclick="estimateServerAi('${target}')">KI-Kosten</button><button onclick="runServerAi('${target}')">Server-KI analysieren</button>`;
 }
 
 function renderServerInventory() {
@@ -323,8 +343,9 @@ function renderServerInventory() {
       ${docs.map(d=>`<div class="fact"><strong>${escapeHtml(d.name || d.key)}</strong><div class="meta">${escapeHtml(d.provider||'')} · ${escapeHtml(d.ip||'')} · SSH ${escapeHtml(d.sshUser||'root')}@${escapeHtml(d.ip||'')}${d.sshPort?':'+escapeHtml(d.sshPort):''}</div><div>${escapeHtml(d.notes||'')}</div></div>`).join('')}
     </div>
     <div class="card"><h2>So arbeitest du an einem Server-Projekt weiter</h2><p class="meta">Wähle unten den passenden Service oder Ordner. Kopiere den Kontext in einen neuen Chat. Der Prompt enthält IP, SSH, Pfad, Startbefehl, Logs und Schutzregeln.</p><div class="notice">Wichtig: Server-Projekte sind nicht automatisch GitHub-Repos im Hub. Der Hub zeigt dir deshalb den Server-Pfad, zugehörige systemd-Services und die Befehle, die du für Änderungen brauchst.</div></div>
-    <div class="card"><h2>Erkannte Bots, Watcher und Dashboards</h2>${botServices.length ? botServices.map(s => `<div class="fact"><div class="fact-head"><div><strong>${escapeHtml(s.unit)}</strong><div class="meta">${escapeHtml(inferServiceKind(s))} · ${escapeHtml(s.description||'')} · ${escapeHtml(s.active||'')} · Autostart: ${escapeHtml(s.enabled||'')}</div></div><div class="row">${copyButton('Kontext kopieren', buildServiceContext(s, inv, docs))}${copyButton('Befehle kopieren', buildServiceCommands(s))}</div></div><div class="kv"><b>Arbeitsordner</b><span>${escapeHtml(s.workingDirectory||'')}</span></div><div class="kv"><b>Startbefehl</b><span><code>${escapeHtml(s.execStart||'')}</code></span></div><div class="kv"><b>Stack</b><span>${(s.stack||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('') || '<span class="meta">nicht erkannt</span>'}</span></div><details><summary>Letzte Logs und Befehle anzeigen</summary><h4>Logs</h4>${renderCommandBlock((s.logs||[]).join('\n') || 'Keine Logs geladen.')}<h4>Befehle</h4>${renderCommandBlock(buildServiceCommands(s))}</details></div>`).join('') : '<div class="meta">Keine relevanten Services erkannt.</div>'}</div>
-    <div class="card"><h2>Server-Projekte unter /opt</h2>${(inv.optProjects||[]).length ? (inv.optProjects||[]).map(p => { const related = (inv.services||[]).filter(s => s.workingDirectory && p.path && s.workingDirectory.startsWith(p.path)); return `<div class="fact"><div class="fact-head"><div><strong>${escapeHtml(p.name)}</strong><div class="meta">${escapeHtml(p.path)} · ${(p.stack||[]).join(', ') || 'Stack nicht erkannt'}</div></div><div class="row">${copyButton('Projektkontext kopieren', buildProjectContext(p, inv, docs, related))}${copyButton('Befehle kopieren', buildProjectCommands(p))}</div></div><div class="kv"><b>Git Remote</b><span>${escapeHtml(p.gitRemote||'')}</span></div><div class="kv"><b>Zugehörige Services</b><span>${related.length ? related.map(s=>`<span class="pill">${escapeHtml(s.unit)}</span>`).join('') : '<span class="meta">keine erkannt</span>'}</span></div><details><summary>Befehle anzeigen</summary>${renderCommandBlock(buildProjectCommands(p))}</details></div>`; }).join('') : '<div class="meta">Keine /opt-Projekte erkannt.</div>'}</div>
+    <div class="card"><h2>Erkannte Bots, Watcher und Dashboards</h2>${botServices.length ? botServices.map(s => `<div class="fact"><div class="fact-head"><div><strong>${escapeHtml(s.unit)}</strong><div class="meta">${escapeHtml(inferServiceKind(s))} · ${escapeHtml(s.description||'')} · ${escapeHtml(s.active||'')} · Autostart: ${escapeHtml(s.enabled||'')}</div></div><div class="row">${copyButton('Kontext kopieren', buildServiceContext(s, inv, docs, findServerAiFor({unit:s.unit, path:s.workingDirectory}))) }${copyButton('Befehle kopieren', buildServiceCommands(s))}${serverAiButtons({unit:s.unit, path:s.workingDirectory, label:s.unit})}</div></div><div class="kv"><b>Arbeitsordner</b><span>${escapeHtml(s.workingDirectory||'')}</span></div><div class="kv"><b>Startbefehl</b><span><code>${escapeHtml(s.execStart||'')}</code></span></div><div class="kv"><b>Stack</b><span>${(s.stack||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join('') || '<span class="meta">nicht erkannt</span>'}</span></div><div class="kv"><b>KI-Analyse</b><span>${renderServerAiSummary(findServerAiFor({unit:s.unit, path:s.workingDirectory}))}</span></div><details><summary>Letzte Logs und Befehle anzeigen</summary><h4>Logs</h4>${renderCommandBlock((s.logs||[]).join('\n') || 'Keine Logs geladen.')}<h4>Befehle</h4>${renderCommandBlock(buildServiceCommands(s))}</details></div>`).join('') : '<div class="meta">Keine relevanten Services erkannt.</div>'}</div>
+    <div class="card"><h2>Server-Projekte unter /opt</h2>${(inv.optProjects||[]).length ? (inv.optProjects||[]).map(p => { const related = (inv.services||[]).filter(s => s.workingDirectory && p.path && s.workingDirectory.startsWith(p.path)); return `<div class="fact"><div class="fact-head"><div><strong>${escapeHtml(p.name)}</strong><div class="meta">${escapeHtml(p.path)} · ${(p.stack||[]).join(', ') || 'Stack nicht erkannt'}</div></div><div class="row">${copyButton('Projektkontext kopieren', buildProjectContext(p, inv, docs, related, findServerAiFor({path:p.path, unit:related[0]?.unit}))) }${copyButton('Befehle kopieren', buildProjectCommands(p))}${serverAiButtons({path:p.path, unit:related[0]?.unit || '', label:p.name})}</div></div><div class="kv"><b>Git Remote</b><span>${escapeHtml(p.gitRemote||'')}</span></div><div class="kv"><b>Zugehörige Services</b><span>${related.length ? related.map(s=>`<span class="pill">${escapeHtml(s.unit)}</span>`).join('') : '<span class="meta">keine erkannt</span>'}</span></div><div class="kv"><b>KI-Analyse</b><span>${renderServerAiSummary(findServerAiFor({path:p.path, unit:related[0]?.unit}))}</span></div><details><summary>Befehle anzeigen</summary>${renderCommandBlock(buildProjectCommands(p))}</details></div>`; }).join('') : '<div class="meta">Keine /opt-Projekte erkannt.</div>'}</div>
+    <div class="card"><h2>Gespeicherte Server-KI-Analysen</h2>${(state.serverAiAnalyses||[]).length ? (state.serverAiAnalyses||[]).map(row => `<div class="fact"><div class="fact-head"><div><strong>${escapeHtml(row.name || row.unit || row.path)}</strong><div class="meta">${escapeHtml(row.unit||'')} · ${escapeHtml(row.path||'')} · ${escapeHtml(row.updatedAt||'')}</div></div>${copyButton('KI-Kontext kopieren', row.analysis?.chatgptContext || '')}</div><p>${escapeHtml(row.analysis?.purpose || '')}</p><details><summary>Analyse anzeigen</summary><pre>${escapeHtml(JSON.stringify(row.analysis, null, 2))}</pre></details></div>`).join('') : '<div class="meta">Noch keine Server-KI-Analyse gespeichert.</div>'}</div>
     <div class="card"><h2>Laufende Ports</h2>${(inv.listeners||[]).map(x => `<div class="snippet">${escapeHtml(x)}</div>`).join('')}</div>`
 }
 
@@ -347,6 +368,35 @@ async function saveServerDoc() {
     state.serverDocs = data.docs || [];
     state.message = 'Server-Doku gespeichert.';
     render();
+  } catch(e) { showError(e); }
+}
+
+
+async function estimateServerAi(encodedTarget) {
+  try {
+    const target = JSON.parse(decodeURIComponent(encodedTarget));
+    const params = new URLSearchParams({ provider: state.settings?.aiProvider || '', model: getCurrentAiModel() || '', path: target.path || '', unit: target.unit || '' });
+    state.message = 'Server-KI-Kosten werden geschätzt...'; state.error=''; render();
+    const estimate = await api(`/api/server/project/ai/estimate?${params.toString()}`);
+    state.serverAiEstimate = estimate;
+    const msg = `Server-KI-Schätzung für ${target.label || target.unit || target.path}\n\nDateien: ${estimate.filesIncluded}\nInput: ${estimate.inputTokensEstimated} Tokens\nOutput geschätzt: ${estimate.outputTokensEstimated} Tokens\nKosten: ${estimate.estimatedCostLabel || 'nicht berechnet'}`;
+    alert(msg);
+    state.message = 'Server-KI-Kosten geschätzt.'; render();
+  } catch(e) { showError(e); }
+}
+
+async function runServerAi(encodedTarget) {
+  try {
+    const target = JSON.parse(decodeURIComponent(encodedTarget));
+    const params = new URLSearchParams({ provider: state.settings?.aiProvider || '', model: getCurrentAiModel() || '', path: target.path || '', unit: target.unit || '' });
+    const estimate = await api(`/api/server/project/ai/estimate?${params.toString()}`);
+    const msg = `Server-KI-Analyse starten?\n\nProjekt: ${target.label || target.unit || target.path}\nDateien: ${estimate.filesIncluded}\nInput: ${estimate.inputTokensEstimated} Tokens\nKosten: ${estimate.estimatedCostLabel || 'nicht berechnet'}\n\nDiese Analyse wird gespeichert und später im Kontext verwendet.`;
+    if (!confirm(msg)) return;
+    state.message = 'Server-Projekt wird per KI analysiert...'; state.error=''; render();
+    const data = await api('/api/server/project/ai/analyze', { method:'POST', body: JSON.stringify({ provider:state.settings?.aiProvider, model:getCurrentAiModel(), path:target.path || '', unit:target.unit || '' }) });
+    state.serverAiAnalyses = data.analyses || [];
+    state.message = 'Server-KI-Analyse gespeichert.';
+    await showServerInventory();
   } catch(e) { showError(e); }
 }
 
@@ -704,7 +754,7 @@ function buildProjectCommands(project) {
   return lines.join('\n') || 'Kein Projekt-Befehl erkannt.';
 }
 
-function buildServiceContext(service, inventory, docs) {
+function buildServiceContext(service, inventory, docs, aiRow = null) {
   const doc = (docs || [])[0] || {};
   return `Ich möchte an einem Server-Service weiterarbeiten.
 
@@ -725,6 +775,9 @@ Service:
 - Startbefehl: ${service?.execStart || 'nicht erkannt'}
 - Stack: ${(service?.stack || []).join(', ') || 'nicht erkannt'}
 
+KI-Analyse:
+${aiRow?.analysis?.chatgptContext || aiRow?.analysis?.summary || 'Noch keine Server-KI-Analyse vorhanden. Vor größeren Änderungen im Hub Server-KI analysieren.'}
+
 Letzte Logs:
 ${(service?.logs || []).join('\n') || 'Keine Logs geladen.'}
 
@@ -739,7 +792,7 @@ ${buildServiceCommands(service)}
 `;
 }
 
-function buildProjectContext(project, inventory, docs, relatedServices = []) {
+function buildProjectContext(project, inventory, docs, relatedServices = [], aiRow = null) {
   const doc = (docs || [])[0] || {};
   return `Ich möchte an einem Server-Projekt weiterarbeiten.
 
@@ -758,6 +811,9 @@ Projekt:
 
 Zugehörige systemd-Services:
 ${relatedServices.length ? relatedServices.map(s => `- ${s.unit}: ${s.description || ''} (${s.active || ''})`).join('\n') : '- keine erkannt'}
+
+KI-Analyse:
+${aiRow?.analysis?.chatgptContext || aiRow?.analysis?.summary || 'Noch keine Server-KI-Analyse vorhanden. Vor größeren Änderungen im Hub Server-KI analysieren.'}
 
 Wichtige Regeln:
 - Projektpfad und zugehörige Services prüfen, bevor Änderungen gemacht werden.
@@ -779,4 +835,4 @@ if (state.session) {
   api('/api/settings').then(s => { state.settings = s; return loadProjects(false); }).then(render).catch(() => { state.session=''; localStorage.removeItem('dh_session'); render(); });
 } else render();
 
-window.showServerInventory = showServerInventory; window.saveServerDoc = saveServerDoc; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;
+window.showServerInventory = showServerInventory; window.estimateServerAi = estimateServerAi; window.runServerAi = runServerAi; window.saveServerDoc = saveServerDoc; window.showFirebaseInventory = showFirebaseInventory; window.saveFirebaseDoc = saveFirebaseDoc; window.estimateAiAnalysis = estimateAiAnalysis; window.login = login; window.saveToken = saveToken; window.saveOpenAiKey = saveOpenAiKey; window.saveAiProviderAndKey = saveAiProviderAndKey; window.fillAiModelDefault = fillAiModelDefault; window.loadRepos = loadRepos; window.loadProjects = loadProjects; window.selectRepo = selectRepo; window.scanRepo = scanRepo; window.loadScan = loadScan; window.setTab = setTab; window.copyText = copyText; window.deployZip = deployZip; window.rollback = rollback; window.saveGroup = saveGroup; window.saveNote = saveNote; window.saveSecret = saveSecret; window.loadSecrets = loadSecrets; window.runAiAnalysis = runAiAnalysis; window.renderRepoList = renderRepoList;

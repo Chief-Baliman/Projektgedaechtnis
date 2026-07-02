@@ -1,5 +1,5 @@
 import { DEFAULT_AI_MODEL, DEFAULT_AI_PROVIDER, MAX_AI_CORPUS_CHARS } from './config.js';
-import { getAiSettings, getSecretValue, saveScan } from './store.js';
+import { getAiSettings, getSecretValue, saveScan, saveServerAiAnalysis, serverAnalysisKey } from './store.js';
 import { loadRepository } from './scanner/repoLoader.js';
 
 const PROVIDERS = {
@@ -580,4 +580,208 @@ function buildAiWiki(scan, ai) {
   lines.push('## Belege');
   for (const e of ai.evidence || []) lines.push(`- ${e.file}:${e.line} - ${e.finding}`);
   return lines.join('\n');
+}
+
+
+const SERVER_ANALYSIS_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    purpose: { type: 'string' },
+    confidence: { type: 'number' },
+    kind: { type: 'string' },
+    summary: { type: 'string' },
+    architecture: { type: 'array', items: { type: 'string' } },
+    runtime: { type: 'array', items: { type: 'string' } },
+    dataFlow: { type: 'array', items: { type: 'string' } },
+    externalServices: { type: 'array', items: { type: 'string' } },
+    envAndSecrets: { type: 'array', items: { type: 'string' } },
+    runbook: { type: 'array', items: { type: 'string' } },
+    risks: { type: 'array', items: { type: 'string' } },
+    guardrails: { type: 'array', items: { type: 'string' } },
+    nextSteps: { type: 'array', items: { type: 'string' } },
+    evidence: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          file: { type: 'string' },
+          line: { type: 'integer' },
+          finding: { type: 'string' },
+          snippet: { type: 'string' }
+        },
+        required: ['file','line','finding','snippet']
+      }
+    },
+    chatgptContext: { type: 'string' }
+  },
+  required: ['purpose','confidence','kind','summary','architecture','runtime','dataFlow','externalServices','envAndSecrets','runbook','risks','guardrails','nextSteps','evidence','chatgptContext']
+};
+
+export async function estimateServerAiAnalysis(details = {}, options = {}) {
+  const settings = getAiSettings();
+  const providerKey = normalizeProvider(options.provider || settings.provider || DEFAULT_AI_PROVIDER);
+  const provider = PROVIDERS[providerKey];
+  const model = String(options.model || settings.models?.[providerKey] || DEFAULT_AI_MODEL || provider.defaultModel).trim() || provider.defaultModel;
+  const prompt = buildServerPrompt(details);
+  const inputChars = prompt.system.length + prompt.user.length;
+  const inputTokensEstimated = Math.ceil(inputChars / 3.8);
+  const outputTokensEstimated = Math.max(1600, Math.min(6500, Math.ceil(inputTokensEstimated * 0.08)));
+  const pricing = lookupPricing(providerKey, model);
+  const estimatedCostUsd = pricing ? ((inputTokensEstimated / 1_000_000) * pricing.input + (outputTokensEstimated / 1_000_000) * pricing.output) : null;
+  return {
+    provider: providerKey,
+    providerLabel: provider.label,
+    model,
+    path: details.projectPath || '',
+    unit: details.service?.unit || '',
+    filesIncluded: details.corpus?.files?.length || 0,
+    corpusChars: serverCorpusText(details).length,
+    inputTokensEstimated,
+    outputTokensEstimated,
+    estimatedCostUsd,
+    estimatedCostLabel: estimatedCostUsd == null ? 'nicht berechnet' : `$${estimatedCostUsd.toFixed(4)}`,
+    pricingNote: pricing ? 'Schätzung anhand Token-Näherung.' : 'Für diesen Anbieter ist keine Kostenschätzung hinterlegt.'
+  };
+}
+
+export async function runServerAiAnalysis(details = {}, options = {}) {
+  const settings = getAiSettings();
+  const providerKey = normalizeProvider(options.provider || settings.provider || DEFAULT_AI_PROVIDER);
+  const provider = PROVIDERS[providerKey];
+  const model = String(options.model || settings.models?.[providerKey] || DEFAULT_AI_MODEL || provider.defaultModel).trim() || provider.defaultModel;
+  const apiKey = getProviderKey(providerKey, provider);
+  if (!apiKey) throw new Error(`Kein API Key für ${provider.label} gespeichert.`);
+  const prompt = buildServerPrompt(details);
+  const raw = await callProviderWithSchema({ providerKey, provider, model, apiKey, prompt, schema: SERVER_ANALYSIS_SCHEMA, schemaName:'developer_hub_server_project_analysis' });
+  const outputText = extractProviderText(providerKey, raw);
+  const parsed = parseAiJson(outputText);
+  const result = normalizeServerAiResult(parsed, { details, providerKey, providerLabel: provider.label, model });
+  const target = { path: details.projectPath || '', unit: details.service?.unit || '', name: details.service?.unit || details.optProject?.name || details.projectPath || '' };
+  const saved = saveServerAiAnalysis(target, result);
+  return { ...result, storageKey: saved.key };
+}
+
+async function callProviderWithSchema({ providerKey, provider, model, apiKey, prompt, schema, schemaName }) {
+  if (provider.mode === 'openai_responses') {
+    const response = await fetch(provider.url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model,
+        input: [
+          { role: 'developer', content: [{ type: 'input_text', text: prompt.system }] },
+          { role: 'user', content: [{ type: 'input_text', text: prompt.user }] }
+        ],
+        text: { format: { type: 'json_schema', name: schemaName, schema, strict: true } }
+      })
+    });
+    return readProviderResponse(response, 'OpenAI');
+  }
+  return callProvider({ providerKey, provider, model, apiKey, prompt });
+}
+
+function buildServerPrompt(details = {}) {
+  const service = details.service || {};
+  const project = details.optProject || {};
+  const inv = details.inventory || {};
+  const filesText = serverCorpusText(details);
+  const system = `Du bist ein Senior-Softwarearchitekt und DevOps-Engineer. Analysiere ein Server-Projekt/Bot wirklich anhand von Unit-Datei, Startbefehl, Logs und Quellcode. Erfinde nichts. Wenn etwas nicht im Code steht, sage es. Keine Secrets wiedergeben. Antworte ausschließlich als JSON im geforderten Schema.`;
+  const user = `Analysiere dieses Server-Projekt für einen Developer Hub.
+
+SERVER
+Host: ${inv.host || ''}
+OS: ${inv.os || ''}
+IP: ${inv.publicIp || (inv.ips||[]).join(', ')}
+
+SYSTEMD SERVICE
+Unit: ${service.unit || ''}
+Beschreibung: ${service.description || ''}
+Status: ${service.active || ''}
+Autostart: ${service.enabled || ''}
+WorkingDirectory: ${service.workingDirectory || ''}
+ExecStart: ${service.execStart || ''}
+EnvironmentFile: ${service.environmentFile || ''}
+User: ${service.user || ''}
+Restart: ${service.restart || ''}
+
+OPT-PROJEKT
+Name: ${project.name || ''}
+Pfad: ${details.projectPath || project.path || ''}
+Stack: ${(project.stack || service.stack || []).join(', ')}
+Git Remote: ${project.gitRemote || ''}
+
+LETZTE LOGS
+${(service.logs || []).join('\n') || 'Keine Logs geladen.'}
+
+GELESENER CODE UND DATEIEN
+${filesText}
+
+Bitte liefere:
+- echten Zweck des Bots/Projekts
+- Architektur und Laufzeitumgebung
+- Datenflüsse, externe Dienste, APIs, Scraper, Telegram/Discord/etc.
+- wo Konfiguration/Secrets liegen, ohne Secret-Werte zu nennen
+- Runbook: wie man weiterentwickelt, testet, neu startet und Logs prüft
+- Risiken und Schutzregeln
+- konkrete Belege mit Datei/Zeile/Snippet
+- fertigen ChatGPT-Kontext, damit man in einem neuen Chat genau an diesem Bot weiterarbeiten kann.`;
+  return { system, user };
+}
+
+function serverCorpusText(details = {}) {
+  const files = details.corpus?.files || [];
+  const maxChars = Math.min(MAX_AI_CORPUS_CHARS, 180000);
+  const ranked = files.slice().sort((a,b) => serverImportance(b) - serverImportance(a));
+  const parts=[]; let used=0;
+  for (const f of ranked) {
+    const numbered = String(f.text || '').split(/\r?\n/).map((line,i)=>`${String(i+1).padStart(4,' ')} | ${line}`).join('\n');
+    const block = `\n\n===== FILE: ${f.relativePath || f.path} | language=${f.language} | lines=${f.lines} | bytes=${f.bytes} =====\n${numbered}`;
+    if (used + block.length > maxChars) { parts.push(`\n[GEKÜRZT: weitere Dateien wegen Kontextlimit ausgelassen]`); break; }
+    parts.push(block); used += block.length;
+  }
+  if (!parts.length) return 'Keine lesbaren Projektdateien gefunden. Analyse muss sich auf systemd und Logs stützen.';
+  return parts.join('');
+}
+
+function serverImportance(f) {
+  const p = String(f.relativePath || f.path || '').toLowerCase();
+  let s = 0;
+  if (/watcher\.py$|bot\.py$|main\.py$|app\.py$|server\.js$|index\.js$|worker\.py$/.test(p)) s += 80;
+  if (/requirements\.txt|pyproject\.toml|package\.json|dockerfile|readme\.md|\.service$|\.env\.example$/.test(p)) s += 60;
+  if (/\.py$|\.js$|\.ts$/.test(p)) s += 30;
+  if (/test|spec|lock|package-lock/.test(p)) s -= 30;
+  return s;
+}
+
+function normalizeServerAiResult(ai, meta) {
+  return {
+    purpose: String(ai.purpose || 'Nicht sicher erkannt.'),
+    confidence: Math.max(0, Math.min(1, Number(ai.confidence || 0))),
+    kind: String(ai.kind || ''),
+    summary: String(ai.summary || ''),
+    architecture: arr(ai.architecture),
+    runtime: arr(ai.runtime),
+    dataFlow: arr(ai.dataFlow),
+    externalServices: arr(ai.externalServices),
+    envAndSecrets: arr(ai.envAndSecrets),
+    runbook: arr(ai.runbook),
+    risks: arr(ai.risks),
+    guardrails: arr(ai.guardrails),
+    nextSteps: arr(ai.nextSteps),
+    evidence: (Array.isArray(ai.evidence) ? ai.evidence : []).slice(0, 40).map(e => ({ file:String(e.file||''), line:Number(e.line||1), finding:String(e.finding||''), snippet:String(e.snippet||'').slice(0,500) })),
+    chatgptContext: String(ai.chatgptContext || ''),
+    provider: meta.providerKey,
+    providerLabel: meta.providerLabel,
+    model: meta.model,
+    analyzedAt: new Date().toISOString(),
+    serverPath: meta.details.projectPath || '',
+    unit: meta.details.service?.unit || '',
+    inputStats: {
+      filesRead: meta.details.corpus?.files?.length || 0,
+      corpusChars: serverCorpusText(meta.details).length,
+      warnings: meta.details.corpus?.warnings || []
+    }
+  };
 }

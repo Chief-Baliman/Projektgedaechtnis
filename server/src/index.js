@@ -7,11 +7,11 @@ import cors from 'cors';
 import multer from 'multer';
 import AdmZip from 'adm-zip';
 import { PORT, APP_ORIGIN, ADMIN_PASSWORD } from './config.js';
-import { audit, exportData, getAllProjects, buildFirebaseContext, buildServerContext, getFirebaseAggregate, getFirebaseDocs, getFirebaseRulesLibrary, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, getServerDocs, listSecrets, revealSecret, saveAiSettings, saveFirebaseDoc, saveGithubToken, saveServerDoc, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
-import { estimateAiAnalysis, getAiProviders, runAiAnalysis } from './aiAnalyzer.js';
+import { audit, exportData, getAllProjects, buildFirebaseContext, buildServerContext, getFirebaseAggregate, getFirebaseDocs, getFirebaseRulesLibrary, getGithubToken, getNote, getResourceGraph, getRollback, getScan, getSettingsSafe, getServerAiAnalyses, getServerDocs, listSecrets, revealSecret, saveAiSettings, saveFirebaseDoc, saveGithubToken, saveServerDoc, saveNote, saveRollback, saveScan, saveSecret, setProjectGroup } from './store.js';
+import { estimateAiAnalysis, estimateServerAiAnalysis, getAiProviders, runAiAnalysis, runServerAiAnalysis } from './aiAnalyzer.js';
 import { listRepos, getBranchHead, putFile, resetBranch } from './github.js';
 import { scanRepository, SCANNER_VERSION } from './scanner/index.js';
-import { getServerInventory } from './serverInventory.js';
+import { getServerInventory, getServerProjectDetails } from './serverInventory.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -74,6 +74,30 @@ app.post('/api/server/docs', requireAuth, (req,res) => { saveServerDoc(req.body?
 app.get('/api/server/context', requireAuth, async (req,res) => {
   try { res.json({ context: buildServerContext(await getServerInventory()), docs:getServerDocs() }); }
   catch(e) { res.status(500).json({ error:e.message }); }
+});
+
+
+app.get('/api/server/ai', requireAuth, (req,res) => res.json({ analyses:getServerAiAnalyses() }));
+
+app.get('/api/server/project/details', requireAuth, async (req,res) => {
+  try { res.json(await getServerProjectDetails({ path:req.query.path, unit:req.query.unit })); }
+  catch(e) { console.error(e); res.status(500).json({ error:e.message }); }
+});
+
+app.get('/api/server/project/ai/estimate', requireAuth, async (req,res) => {
+  try {
+    const details = await getServerProjectDetails({ path:req.query.path, unit:req.query.unit });
+    const estimate = await estimateServerAiAnalysis(details, { provider:req.query.provider, model:req.query.model });
+    res.json(estimate);
+  } catch(e) { console.error(e); res.status(500).json({ error:e.message }); }
+});
+
+app.post('/api/server/project/ai/analyze', requireAuth, async (req,res) => {
+  try {
+    const details = await getServerProjectDetails({ path:req.body?.path, unit:req.body?.unit });
+    const ai = await runServerAiAnalysis(details, { provider:req.body?.provider, model:req.body?.model });
+    res.json({ ok:true, ai, analyses:getServerAiAnalyses() });
+  } catch(e) { console.error(e); res.status(500).json({ error:e.message }); }
 });
 
 app.get('/api/firebase/aggregate', requireAuth, (req,res) => res.json(getFirebaseAggregate()));
